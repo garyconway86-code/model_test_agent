@@ -1,0 +1,5 @@
+[2026-03-10 14:35:01] INFO: Starting conversion for whisper-small (fp32)
+[2026-03-10 14:35:02] INFO: Loading checkpoint from /data/models/whisper-small/model.bin
+[2026-03-10 14:35:02] ERROR: FileNotFoundError: No such file or directory: '/data/models/whisper-small/model.bin'
+[2026-03-10 14:35:02] ERROR: Failed to load checkpoint — please verify the path
+[2026-03-10 14:35:03] INFO: Conversion FAILED for whisper-small

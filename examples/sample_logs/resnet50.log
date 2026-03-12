@@ -1,0 +1,8 @@
+[2026-03-10 14:23:01] INFO: Starting conversion for resnet50 (int8)
+[2026-03-10 14:23:02] INFO: Loading checkpoint from /data/models/resnet50/weights.pth
+[2026-03-10 14:23:03] INFO: Parsing layer structure...
+[2026-03-10 14:23:04] ERROR: Shape mismatch at layer conv1: expected shape [64, 3, 7, 7] but got [64, 3, 3, 3]
+[2026-03-10 14:23:04] ERROR: Cannot proceed with conversion — tensor size 64 must match 192 at dim 1
+[2026-03-10 14:23:05] INFO: Attempting fallback reshape...
+[2026-03-10 14:23:05] ERROR: Fallback failed: shape mismatch persists after reshape attempt
+[2026-03-10 14:23:06] INFO: Conversion FAILED for resnet50

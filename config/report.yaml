@@ -1,0 +1,54 @@
+# ============================================================
+# Report Configuration
+# ============================================================
+# Controls the output format of the summary report.
+# ============================================================
+
+xlsx:
+  filename_template: "test_report_{timestamp}.xlsx"
+  sheet_name: "Model Conversion Test Report"
+  # Column definitions — order here = order in the spreadsheet
+  columns:
+    - key: model_name
+      header: "Model Name"
+      width: 28
+    - key: quantization
+      header: "Quantization"
+      width: 14
+    - key: has_test_data
+      header: "Has Test Data"
+      width: 13
+    - key: error_category
+      header: "Error Category"
+      width: 18
+    - key: error_count
+      header: "Error Count"
+      width: 12
+    - key: key_log_snippet
+      header: "Key Log (truncated)"
+      width: 50
+    - key: history_match
+      header: "Seen Before"
+      width: 12
+    - key: suggested_fix
+      header: "Suggested Fix"
+      width: 55
+    - key: fix_executed
+      header: "Fix Executed"
+      width: 12
+    - key: fix_result
+      header: "Fix Result"
+      width: 18
+    - key: status
+      header: "Status"
+      width: 12
+
+  # Style
+  header_fill_color: "1F4E79"
+  header_font_color: "FFFFFF"
+  alternating_row_color: "D6E4F0"
+
+html:
+  filename_template: "test_report_{timestamp}.html"
+  title: "Model Conversion Test Report"
+  include_charts: true

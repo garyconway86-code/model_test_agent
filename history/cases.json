@@ -1,0 +1,24 @@
+[
+  {
+    "id": "case-001",
+    "timestamp": "2026-02-15T10:30:00",
+    "error_category": "shape_mismatch",
+    "model_name": "resnet50",
+    "quantization": "int8",
+    "key_log": "expected shape [64, 3, 7, 7] but got [64, 3, 3, 3]",
+    "root_cause": "Kernel size changed in custom variant but conversion config still used standard ResNet layout",
+    "solution": "Update conversion config to match actual kernel dimensions; pass --override-kernel-size flag",
+    "effective": true
+  },
+  {
+    "id": "case-002",
+    "timestamp": "2026-02-20T14:15:00",
+    "error_category": "dtype_error",
+    "model_name": "bert-base",
+    "quantization": "fp16",
+    "key_log": "unsupported dtype: bfloat16",
+    "root_cause": "Source model uses bfloat16 but target backend only supports float16",
+    "solution": "Add explicit dtype cast to float16 before conversion; use --force-dtype fp16",
+    "effective": true
+  }
+]

@@ -1,0 +1,100 @@
+# ============================================================
+# Error Classification Keywords
+# ============================================================
+# Each top-level key is an error category name.
+# `keywords`    — list of case-insensitive substrings to match in log lines.
+# `patterns`    — list of regex patterns for finer-grained matching.
+# `priority`    — lower number = matched first when a line hits multiple categories.
+# `description` — human-readable summary shown in reports.
+# ============================================================
+
+shape_mismatch:
+  keywords:
+    - "shape mismatch"
+    - "dimension mismatch"
+    - "size mismatch"
+    - "expected shape"
+  patterns:
+    - "expected \\[.*\\] but got \\[.*\\]"
+    - "tensor size \\d+ must match"
+  priority: 1
+  description: "Tensor shape or dimension mismatch during conversion"
+
+dtype_error:
+  keywords:
+    - "dtype"
+    - "data type"
+    - "type error"
+    - "unsupported type"
+  patterns:
+    - "unsupported dtype: \\w+"
+    - "cannot cast \\w+ to \\w+"
+  priority: 2
+  description: "Data type incompatibility or unsupported quantization type"
+
+missing_operator:
+  keywords:
+    - "not implemented"
+    - "unsupported op"
+    - "unknown operator"
+    - "missing operator"
+  patterns:
+    - "op '\\w+' is not supported"
+  priority: 3
+  description: "Operator not implemented in target framework"
+
+weight_loading:
+  keywords:
+    - "weight"
+    - "checkpoint"
+    - "state_dict"
+    - "missing key"
+    - "unexpected key"
+  patterns:
+    - "missing keys?: \\[.*\\]"
+    - "unexpected keys?: \\[.*\\]"
+  priority: 4
+  description: "Weight loading or checkpoint parsing failure"
+
+memory_error:
+  keywords:
+    - "out of memory"
+    - "OOM"
+    - "CUDA error"
+    - "memory allocation"
+  patterns:
+    - "CUDA out of memory"
+    - "Cannot allocate \\d+"
+  priority: 5
+  description: "GPU/CPU memory allocation failure"
+
+numerical_error:
+  keywords:
+    - "nan"
+    - "inf"
+    - "numerical"
+    - "overflow"
+    - "underflow"
+  patterns:
+    - "tensor contains (nan|inf)"
+    - "numerical instability"
+  priority: 6
+  description: "Numerical instability (NaN/Inf) in computation"
+
+io_error:
+  keywords:
+    - "file not found"
+    - "permission denied"
+    - "no such file"
+    - "IOError"
+    - "FileNotFoundError"
+  patterns:
+    - "No such file or directory: '.*'"
+  priority: 7
+  description: "File system I/O error"
+
+unknown:
+  keywords: []
+  patterns: []
+  priority: 999
+  description: "Unclassified error — requires manual inspection"

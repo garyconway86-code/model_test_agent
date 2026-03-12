@@ -1,0 +1,35 @@
+[build-system]
+requires = ["hatchling"]
+build-backend = "hatchling.build"
+
+[project]
+name = "model-test-agent"
+version = "0.1.0"
+description = "LangGraph-based agent for automated model conversion test analysis"
+requires-python = ">=3.9"
+dependencies = [
+    "langgraph>=0.2.0",
+    "langchain-openai>=0.2.0",
+    "langchain-core>=0.3.0",
+    "pyyaml>=6.0",
+    "openpyxl>=3.1.0",
+    "matplotlib>=3.8.0",
+    "rich>=13.0.0",
+    "pydantic>=2.0.0",
+]
+
+[project.optional-dependencies]
+dev = [
+    "pytest>=8.0",
+    "pytest-asyncio>=0.23",
+]
+
+[project.scripts]
+model-test-agent = "model_test_agent.__main__:main"
+
+[tool.hatch.build.targets.wheel]
+packages = ["src/model_test_agent"]
+
+[tool.pytest.ini_options]
+testpaths = ["tests"]
+pythonpath = ["src"]
