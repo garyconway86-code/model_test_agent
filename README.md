@@ -5,16 +5,16 @@
 ## 架构
 
 ```
-┌─────────────┐    ┌──────────────────┐    ┌──────────────────┐
-│  日志提取    │───▶│  错误分类         │───▶│  历史案例加载     │
-│  (Tool)      │    │  (Subgraph)      │    │  (Tool)          │
-└─────────────┘    └──────────────────┘    └──────────────────┘
-                                                     │
-                                                     ▼
-┌─────────────┐    ┌──────────────────┐    ┌──────────────────┐
-│  汇总报告    │◀──│  保存历史         │◀──│  调试分析+重试     │
-│  (Tool)      │    │  (Tool)          │    │  (Subgraph)      │
-└─────────────┘    └──────────────────┘    └──────────────────┘
+┌──────────────────┐    ┌──────────────────┐    ┌──────────────────┐
+│  日志提取          │───▶│  错误分类         │───▶│  调试分析+重试    │
+│  模型配置加载      │    │  (Subgraph)      │    │  (Subgraph)      │
+└──────────────────┘    └──────────────────┘    └──────────────────┘
+                                                          │
+                                                          ▼
+                         ┌──────────────────┐    ┌──────────────────┐
+                         │  汇总报告         │◀──│  保存历史案例      │
+                         │  (Tool)          │    │  (Tool)          │
+                         └──────────────────┘    └──────────────────┘
 ```
 
 三层设计：
@@ -25,45 +25,89 @@
 ## 安装
 
 ```bash
-pip install -e ".[dev]"
+pip install -r requirements-dev.txt
+pip install -e .
 ```
+
+如果你用 `conda`，更推荐先建独立环境：
+
+```bash
+conda create -n model-test-agent python=3.11 -y
+conda activate model-test-agent
+pip install -r requirements-dev.txt
+pip install -e .
+```
+
+Python 最低版本现在是 `3.10`，推荐直接用 `3.11`。
 
 ## 使用
 
 ### 交互模式（中文界面）
 
 ```bash
-python -m model_test_agent
+model-test-agent
 ```
 
 ### 命令行模式
 
 ```bash
 # 完整流程
-python -m model_test_agent --log-dir ./logs --config ./models.yaml --output ./output
+model-test-agent --log-dir ./logs --config ./models.yaml --output ./output
 
 # 仅分类
-python -m model_test_agent --log-dir ./logs --mode classify
+model-test-agent --log-dir ./logs --mode classify
 
 # 仅调试分析
-python -m model_test_agent --log-dir ./logs --config ./models.yaml --mode debug
+model-test-agent --log-dir ./logs --config ./models.yaml --mode debug
 
 # SNR 分析（独立子图）
-python -m model_test_agent --config ./models.yaml --mode snr
+model-test-agent --config ./models.yaml --mode snr
 
 # 英文界面
-python -m model_test_agent --locale en
+model-test-agent --locale en
+
+# 跳过启动前 LLM 健康检查
+model-test-agent --skip-health-check
 ```
+
+### 参数说明
+
+| 参数 | 默认值 | 说明 |
+|------|--------|------|
+| `--log-dir` | — | 日志目录路径（非 SNR 模式必填） |
+| `--config` | — | 模型配置文件路径（YAML） |
+| `--output` | `./output` | 报告和图表的输出目录 |
+| `--mode` | `full` | 运行模式：`full` 完整流程 / `classify` 仅分类 / `debug` 仅调试分析 / `snr` 仅 SNR 分析 |
+| `--auto-fix` | `false` | 自动在 Docker 中执行修复命令 |
+| `--max-retries` | `2` | 修复失败时的最大重试次数 |
+| `--llm-config` | 内置路径 | 覆盖默认的 `config/llm.yaml` 路径 |
+| `--locale` | 系统语言 | 界面语言：`zh` 中文 / `en` 英文 |
+| `--check-api` | — | 对所有 LLM profile 做健康检查后退出 |
+| `--skip-health-check` | — | 跳过启动前的 LLM 连通性预检（服务不稳定时加速启动） |
+| `--show-graph` | — | 在终端打印工作流图结构后退出 |
+| `--export-graph` | — | 导出工作流图到文件，支持 `.md`（Mermaid）和 `.png` |
 
 ### 使用示例数据
 
 ```bash
-python -m model_test_agent \
+model-test-agent \
   --log-dir examples/sample_logs \
   --config examples/sample_config/models.yaml \
   --output ./output \
   --mode classify
 ```
+
+### `python -m` 什么时候用
+
+```bash
+python -m model_test_agent
+```
+
+这个方式主要适合两种情况：
+- 你还没安装脚本入口，只是临时从源码目录直接运行。
+- 你在调试 `src/model_test_agent/__main__.py`，想明确指定解释器。
+
+日常使用时，安装后的 `model-test-agent` 更自然，也更符合 CLI 工具习惯。
 
 ## 配置
 

@@ -18,30 +18,47 @@ from langgraph.graph import END, StateGraph
 from model_test_agent.skills.debug_analyzer import DebugAnalyzerSkill
 from model_test_agent.state import DebugResult, DebugState, FixStatus
 from model_test_agent.tools.docker_executor import DockerExecutor
-from model_test_agent.tools.history_store import HistoryStore
+from model_test_agent.tools.semantic_retriever import SemanticRetriever
 
 
 def _analyze(state: DebugState) -> dict[str, Any]:
     """Run the DebugAnalyzerSkill on all error groups."""
     skill = DebugAnalyzerSkill()
-    store = HistoryStore()
-    history = store.get_all()
+    retriever = SemanticRetriever()
 
     error_groups = state.get("error_groups", {})
     models = state.get("models", [])
 
-    results = skill.run(error_groups=error_groups, models=models, history_cases=history)
+    # Retrieve relevant history per category before calling the LLM.
+    history_per_category = {
+        category: retriever.find_similar(
+            category,
+            key_log=errors[0].message if errors else "",
+            top_k=3,
+        )
+        for category, errors in error_groups.items()
+    }
+
+    results = skill.run(
+        error_groups=error_groups,
+        models=models,
+        history_per_category=history_per_category,
+    )
     return {"debug_results": results, "retry_count": 0}
 
 
 def _execute_fix(state: DebugState) -> dict[str, Any]:
     """Execute fix commands via Docker for results that have a fix_command."""
     executor = DockerExecutor()
+    auto_fix = state.get("auto_fix", False)
     results = state.get("debug_results", [])
     updated: list[DebugResult] = []
 
     for dr in results:
-        if dr.fix_command and dr.fix_status in (FixStatus.PENDING, FixStatus.FAILED):
+        if dr.fix_command and not auto_fix and dr.fix_status == FixStatus.PENDING:
+            dr.fix_status = FixStatus.SKIPPED
+            dr.fix_output = "Auto-fix disabled; command not executed."
+        elif dr.fix_command and dr.fix_status in (FixStatus.PENDING, FixStatus.FAILED):
             dr.fix_status = FixStatus.RUNNING
             outcome = executor.run(dr.fix_command)
             dr.fix_output = outcome.output
@@ -54,6 +71,9 @@ def _execute_fix(state: DebugState) -> dict[str, Any]:
 
 def _check_result(state: DebugState) -> str:
     """Conditional edge: decide whether to retry or finish."""
+    if not state.get("auto_fix", False):
+        return "done"
+
     results = state.get("debug_results", [])
     retry_count = state.get("retry_count", 0)
     max_retries = state.get("max_retries", 2)

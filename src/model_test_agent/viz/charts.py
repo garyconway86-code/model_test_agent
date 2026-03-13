@@ -20,6 +20,15 @@ from model_test_agent.state import ErrorEntry, DebugResult, FixStatus, ReportRow
 _CJK_FONTS = [
     "Noto Sans CJK SC", "Source Han Sans SC", "WenQuanYi Micro Hei",
     "Microsoft YaHei", "SimHei", "PingFang SC", "Heiti SC",
+    "Hiragino Sans GB", "STHeiti", "Songti SC", "Arial Unicode MS",
+]
+_CJK_FONT_FILES = [
+    "/System/Library/Fonts/Hiragino Sans GB.ttc",
+    "/System/Library/Fonts/STHeiti Medium.ttc",
+    "/System/Library/Fonts/STHeiti Light.ttc",
+    "/System/Library/Fonts/Supplemental/Songti.ttc",
+    "/System/Library/Fonts/Supplemental/Arial Unicode.ttf",
+    "/Library/Fonts/Arial Unicode.ttf",
 ]
 
 def _find_cjk_font() -> str | None:
@@ -27,12 +36,26 @@ def _find_cjk_font() -> str | None:
     for name in _CJK_FONTS:
         if name in available:
             return name
+
+    for font_path in _CJK_FONT_FILES:
+        path = Path(font_path)
+        if not path.exists():
+            continue
+        try:
+            fm.fontManager.addfont(str(path))
+            return fm.FontProperties(fname=str(path)).get_name()
+        except RuntimeError:
+            continue
     return None
 
 _CJK_FONT = _find_cjk_font()
 if _CJK_FONT:
     plt.rcParams["font.sans-serif"] = [_CJK_FONT] + plt.rcParams.get("font.sans-serif", [])
-    plt.rcParams["axes.unicode_minus"] = False
+plt.rcParams["axes.unicode_minus"] = False
+
+
+def _label(zh_text: str, en_text: str) -> str:
+    return zh_text if _CJK_FONT else en_text
 
 
 # Color palette
@@ -70,7 +93,7 @@ class ChartGenerator:
         )
         for text in autotexts:
             text.set_fontsize(9)
-        ax.set_title("错误类型分布", fontsize=14, fontweight="bold")
+        ax.set_title(_label("错误类型分布", "Error Distribution"), fontsize=14, fontweight="bold")
         fig.tight_layout()
 
         path = self.output_dir / filename
@@ -92,8 +115,8 @@ class ChartGenerator:
 
         fig, ax = plt.subplots(figsize=(10, max(4, len(names) * 0.4)))
         bars = ax.barh(names, values, color=_COLORS[0], edgecolor="white", height=0.6)
-        ax.set_xlabel("错误数量")
-        ax.set_title(f"错误最多的 {top_n} 个模型", fontsize=14, fontweight="bold")
+        ax.set_xlabel(_label("错误数量", "Error Count"))
+        ax.set_title(_label(f"错误最多的 {top_n} 个模型", f"Top {top_n} Models by Errors"), fontsize=14, fontweight="bold")
         ax.bar_label(bars, padding=3, fontsize=9)
         ax.spines["top"].set_visible(False)
         ax.spines["right"].set_visible(False)
@@ -124,8 +147,8 @@ class ChartGenerator:
 
         fig, ax = plt.subplots(figsize=(max(6, len(categories) * 1.2), 5))
         bars = ax.bar(categories, [1] * len(categories), color=colors, edgecolor="white")
-        ax.set_ylabel("错误类别")
-        ax.set_title("修复状态总览", fontsize=14, fontweight="bold")
+        ax.set_ylabel(_label("错误类别", "Error Category"))
+        ax.set_title(_label("修复状态总览", "Fix Status Overview"), fontsize=14, fontweight="bold")
         ax.set_yticks([])
 
         # Legend
@@ -163,7 +186,7 @@ class ChartGenerator:
         if not quant_types or not categories:
             # Nothing to plot
             fig, ax = plt.subplots(figsize=(4, 3))
-            ax.text(0.5, 0.5, "数据不足", ha="center", va="center", fontsize=14)
+            ax.text(0.5, 0.5, _label("数据不足", "Not enough data"), ha="center", va="center", fontsize=14)
             ax.set_axis_off()
             path = self.output_dir / filename
             fig.savefig(path, dpi=150)
@@ -187,7 +210,7 @@ class ChartGenerator:
         ax.set_xticklabels(categories, rotation=30, ha="right", fontsize=9)
         ax.set_yticks(range(len(quant_types)))
         ax.set_yticklabels(quant_types, fontsize=9)
-        ax.set_title("量化类型 × 错误类别 热力图", fontsize=14, fontweight="bold")
+        ax.set_title(_label("量化类型 × 错误类别 热力图", "Quantization vs Error Heatmap"), fontsize=14, fontweight="bold")
 
         # Annotate cells
         for i in range(len(quant_types)):
@@ -196,7 +219,7 @@ class ChartGenerator:
                 if val > 0:
                     ax.text(j, i, str(val), ha="center", va="center", fontsize=10, fontweight="bold")
 
-        fig.colorbar(im, ax=ax, shrink=0.8, label="错误数量")
+        fig.colorbar(im, ax=ax, shrink=0.8, label=_label("错误数量", "Error Count"))
         fig.tight_layout()
 
         path = self.output_dir / filename

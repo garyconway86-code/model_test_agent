@@ -7,10 +7,9 @@ subgraphs can run independently with a compatible subset of the full state.
 
 from __future__ import annotations
 
-import operator
 from dataclasses import dataclass, field
 from enum import Enum
-from typing import Annotated, Any, TypedDict
+from typing import Any, TypedDict
 
 
 # ------------------------------------------------------------------
@@ -80,46 +79,29 @@ class ReportRow:
     status: str = ""
 
 
-# ------------------------------------------------------------------
-# LangGraph state — used as TypedDict for graph compatibility
-# ------------------------------------------------------------------
-
-def _merge_lists(left: list, right: list) -> list:
-    """Reducer: append items from *right* onto *left*."""
-    return left + right
-
-
-def _merge_dicts(left: dict, right: dict) -> dict:
-    """Reducer: shallow-merge *right* into *left*."""
-    merged = {**left}
-    for key, value in right.items():
-        if key in merged and isinstance(merged[key], list) and isinstance(value, list):
-            merged[key] = merged[key] + value
-        else:
-            merged[key] = value
-    return merged
-
-
 class AgentState(TypedDict, total=False):
     """Full pipeline state.  Subgraphs may use a subset of these keys."""
 
     # --- Inputs ---
     log_dir: str
     config_path: str
+    output_dir: str
+    auto_fix: bool
 
     # --- Extracted data ---
-    models: Annotated[list[ModelInfo], _merge_lists]
-    errors: Annotated[list[ErrorEntry], _merge_lists]
+    models: list[ModelInfo]
+    errors: list[ErrorEntry]
 
     # --- Classification ---
-    error_groups: Annotated[dict[str, list[ErrorEntry]], _merge_dicts]
+    error_groups: dict[str, list[ErrorEntry]]
 
     # --- Debug ---
-    debug_results: Annotated[list[DebugResult], _merge_lists]
+    debug_results: list[DebugResult]
 
     # --- Report ---
-    report_rows: Annotated[list[ReportRow], _merge_lists]
+    report_rows: list[ReportRow]
     report_path: str
+    report_html_path: str
 
     # --- Control flow ---
     current_category: str
@@ -130,23 +112,24 @@ class AgentState(TypedDict, total=False):
 # Convenience subsets for subgraphs that only need part of the state.
 
 class ClassificationState(TypedDict, total=False):
-    errors: Annotated[list[ErrorEntry], _merge_lists]
-    error_groups: Annotated[dict[str, list[ErrorEntry]], _merge_dicts]
-    models: Annotated[list[ModelInfo], _merge_lists]
+    errors: list[ErrorEntry]
+    error_groups: dict[str, list[ErrorEntry]]
+    models: list[ModelInfo]
 
 
 class DebugState(TypedDict, total=False):
-    error_groups: Annotated[dict[str, list[ErrorEntry]], _merge_dicts]
-    debug_results: Annotated[list[DebugResult], _merge_lists]
-    models: Annotated[list[ModelInfo], _merge_lists]
+    error_groups: dict[str, list[ErrorEntry]]
+    debug_results: list[DebugResult]
+    models: list[ModelInfo]
     current_category: str
     retry_count: int
     max_retries: int
+    auto_fix: bool
 
 
 class SNRState(TypedDict, total=False):
     """State for the layerwise SNR analysis subgraph."""
 
-    models: Annotated[list[ModelInfo], _merge_lists]
-    snr_results: Annotated[dict[str, Any], _merge_dicts]
+    models: list[ModelInfo]
+    snr_results: dict[str, Any]
     log_dir: str

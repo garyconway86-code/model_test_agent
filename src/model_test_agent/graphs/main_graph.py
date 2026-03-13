@@ -1,15 +1,15 @@
 """Main LangGraph workflow — orchestrates the full pipeline.
 
-    ┌─────────────┐    ┌──────────────────┐    ┌──────────────────┐
-    │  extract     │───▶│  classification   │───▶│  load_history    │
-    │  (Tool)      │    │  (Subgraph)       │    │  (Tool)          │
-    └─────────────┘    └──────────────────┘    └──────────────────┘
-                                                         │
-                                                         ▼
-    ┌─────────────┐    ┌──────────────────┐    ┌──────────────────┐
-    │  report      │◀──│  save_history     │◀──│  debug            │
-    │  (Tool)      │    │  (Tool)          │    │  (Subgraph+retry) │
-    └─────────────┘    └──────────────────┘    └──────────────────┘
+    ┌──────────────────┐    ┌──────────────────┐    ┌──────────────────┐
+    │  extract          │───▶│  classification   │───▶│  debug            │
+    │  (logs + config)  │    │  (Subgraph)       │    │  (Subgraph+retry) │
+    └──────────────────┘    └──────────────────┘    └──────────────────┘
+                                                              │
+                                                              ▼
+                             ┌──────────────────┐    ┌──────────────────┐
+                             │  report           │◀──│  save_history     │
+                             │  (Tool)           │    │  (Tool)           │
+                             └──────────────────┘    └──────────────────┘
 
 Each box is a LangGraph node.  Subgraphs are compiled child graphs added
 as nodes, so they can also be invoked independently.
@@ -55,15 +55,6 @@ def _extract(state: AgentState) -> dict[str, Any]:
         models = reader.read_file(config_path)
 
     return {"errors": errors, "models": models}
-
-
-def _load_history(state: AgentState) -> dict[str, Any]:
-    """Node 3: load history — this is a pass-through that primes the store."""
-    # The HistoryStore is loaded lazily by the DebugAnalyzerSkill.
-    # This node exists as an explicit step for visibility in the graph.
-    store = HistoryStore()
-    _ = store.get_all()
-    return {}
 
 
 def _save_history(state: AgentState) -> dict[str, Any]:
@@ -127,11 +118,15 @@ def _report(state: AgentState) -> dict[str, Any]:
                 status=dr.fix_status.value if dr else "pending",
             ))
 
-    gen = ReportGenerator()
+    gen = ReportGenerator(output_dir=state.get("output_dir", "."))
     xlsx_path = gen.generate_xlsx(rows)
     html_path = gen.generate_html(rows)
 
-    return {"report_rows": rows, "report_path": str(xlsx_path)}
+    return {
+        "report_rows": rows,
+        "report_path": str(xlsx_path),
+        "report_html_path": str(html_path),
+    }
 
 
 # ------------------------------------------------------------------
@@ -152,7 +147,6 @@ def build_main_graph(compile: bool = True) -> Any:
     # --- Nodes ---
     graph.add_node("extract", _extract)
     graph.add_node("classification", build_classification_subgraph().compile())
-    graph.add_node("load_history", _load_history)
     graph.add_node("debug", build_debug_subgraph().compile())
     graph.add_node("save_history", _save_history)
     graph.add_node("report", _report)
@@ -160,8 +154,7 @@ def build_main_graph(compile: bool = True) -> Any:
     # --- Edges ---
     graph.set_entry_point("extract")
     graph.add_edge("extract", "classification")
-    graph.add_edge("classification", "load_history")
-    graph.add_edge("load_history", "debug")
+    graph.add_edge("classification", "debug")
     graph.add_edge("debug", "save_history")
     graph.add_edge("save_history", "report")
     graph.add_edge("report", END)

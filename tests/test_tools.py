@@ -14,6 +14,7 @@ from model_test_agent.tools.docker_executor import DockerExecutor
 from model_test_agent.tools.history_store import HistoryStore
 from model_test_agent.tools.log_extractor import LogExtractor
 from model_test_agent.tools.report_generator import ReportGenerator
+from model_test_agent.viz import charts
 
 
 # ------------------------------------------------------------------
@@ -227,3 +228,9 @@ class TestReportGenerator:
         assert "resnet50" in content
         assert "bert-base" in content
         assert "shape_mismatch" in content
+
+
+class TestCharts:
+    def test_label_falls_back_to_english_without_cjk_font(self, monkeypatch) -> None:
+        monkeypatch.setattr(charts, "_CJK_FONT", None)
+        assert charts._label("错误数量", "Error Count") == "Error Count"

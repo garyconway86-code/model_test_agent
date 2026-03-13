@@ -7,8 +7,6 @@ from model_test_agent.state import (
     FixStatus,
     ModelInfo,
     ReportRow,
-    _merge_dicts,
-    _merge_lists,
 )
 
 
@@ -32,17 +30,3 @@ class TestDataClasses:
     def test_fix_status_values(self) -> None:
         assert FixStatus.SUCCESS.value == "success"
         assert FixStatus.FAILED.value == "failed"
-
-
-class TestReducers:
-    def test_merge_lists(self) -> None:
-        assert _merge_lists([1, 2], [3, 4]) == [1, 2, 3, 4]
-        assert _merge_lists([], [1]) == [1]
-
-    def test_merge_dicts(self) -> None:
-        result = _merge_dicts({"a": [1]}, {"a": [2], "b": 3})
-        assert result == {"a": [1, 2], "b": 3}
-
-    def test_merge_dicts_overwrite(self) -> None:
-        result = _merge_dicts({"a": "old"}, {"a": "new"})
-        assert result == {"a": "new"}

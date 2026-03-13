@@ -9,8 +9,10 @@ Provides:
 
 from __future__ import annotations
 
+from pathlib import Path
 from typing import Any
 
+from rich.columns import Columns
 from rich.console import Console
 from rich.panel import Panel
 from rich.progress import BarColumn, Progress, SpinnerColumn, TextColumn, TimeElapsedColumn
@@ -35,10 +37,16 @@ class ConsoleUI:
     def create_progress(self) -> Progress:
         """Create a Rich progress bar for pipeline steps."""
         return Progress(
-            SpinnerColumn(),
-            TextColumn("[bold blue]{task.description}"),
-            BarColumn(bar_width=40),
-            TextColumn("[progress.percentage]{task.percentage:>3.0f}%"),
+            SpinnerColumn(style="cyan"),
+            TextColumn("[bold #EAF2FF]{task.description}"),
+            BarColumn(
+                bar_width=32,
+                complete_style="#29C2A6",
+                finished_style="#29C2A6",
+                pulse_style="#1D6FD6",
+            ),
+            TextColumn("[bold #29C2A6]{task.percentage:>3.0f}%"),
+            TextColumn("{task.fields[detail]}", style="dim", justify="left"),
             TimeElapsedColumn(),
             console=self.console,
         )
@@ -49,22 +57,28 @@ class ConsoleUI:
 
     def show_banner(self) -> None:
         self.console.print(Panel(
-            "[bold cyan]模型转换测试分析 Agent[/bold cyan]\n"
-            "[dim]基于 LangGraph 的自动化错误分析与修复建议系统[/dim]",
-            border_style="cyan",
+            "[bold #EAF2FF]MODEL TEST AGENT[/bold #EAF2FF]\n"
+            "[#7FD1FF]模型转换测试分析[/#7FD1FF]  [dim]LangGraph workflow + LLM diagnostics[/dim]",
+            border_style="#1D6FD6",
             padding=(1, 2),
         ))
 
     def show_extraction_summary(self, errors: list[ErrorEntry], models: list[ModelInfo]) -> None:
         self.console.print()
-        self.console.rule("[bold]📋 提取结果", style="blue")
-        self.console.print(f"  模型数量: [bold]{len(models)}[/bold]")
-        self.console.print(f"  错误总数: [bold red]{len(errors)}[/bold red]")
-        self.console.print(f"  涉及模型: [bold]{len({e.model_name for e in errors})}[/bold]")
+        self.console.rule("[bold]提取结果", style="#1D6FD6")
+        metrics = [
+            Panel.fit(f"[bold]{len(models)}[/bold]\n[dim]模型数量[/dim]", border_style="#1D6FD6"),
+            Panel.fit(f"[bold red]{len(errors)}[/bold red]\n[dim]错误总数[/dim]", border_style="#B94E48"),
+            Panel.fit(
+                f"[bold]{len({e.model_name for e in errors})}[/bold]\n[dim]涉及模型[/dim]",
+                border_style="#29C2A6",
+            ),
+        ]
+        self.console.print(Columns(metrics, equal=True, expand=True))
 
     def show_classification_tree(self, error_groups: dict[str, list[ErrorEntry]]) -> None:
         self.console.print()
-        self.console.rule("[bold]🔍 错误分类结果", style="blue")
+        self.console.rule("[bold]错误分类", style="#1D6FD6")
         tree = Tree("[bold]错误分类")
         for category, errors in sorted(error_groups.items(), key=lambda x: -len(x[1])):
             branch = tree.add(f"[bold yellow]{category}[/bold yellow] ({len(errors)} 个)")
@@ -78,7 +92,7 @@ class ConsoleUI:
 
     def show_debug_results(self, results: list[DebugResult]) -> None:
         self.console.print()
-        self.console.rule("[bold]🔧 调试分析结果", style="blue")
+        self.console.rule("[bold]调试分析", style="#1D6FD6")
         for dr in results:
             status_color = {
                 FixStatus.SUCCESS: "green",
@@ -97,6 +111,10 @@ class ConsoleUI:
             )
             if dr.history_match_id:
                 panel_content += f"\n[bold]历史匹配:[/bold] {dr.history_match_id}"
+            if dr.fix_command:
+                panel_content += f"\n[bold]验证命令:[/bold] {dr.fix_command[:160]}"
+            if dr.fix_output and dr.fix_status in (FixStatus.FAILED, FixStatus.SKIPPED):
+                panel_content += f"\n[bold]原因:[/bold] {dr.fix_output[:240]}"
 
             self.console.print(Panel(
                 panel_content,
@@ -107,11 +125,11 @@ class ConsoleUI:
 
     def show_report_table(self, rows: list[ReportRow]) -> None:
         self.console.print()
-        self.console.rule("[bold]📊 汇总报告", style="blue")
+        self.console.rule("[bold]汇总报告", style="#1D6FD6")
         table = Table(
             show_header=True,
-            header_style="bold white on #1F4E79",
-            border_style="blue",
+            header_style="bold white on #103A5C",
+            border_style="#1D6FD6",
             row_styles=["", "on #D6E4F0"],
             pad_edge=True,
         )
@@ -131,6 +149,7 @@ class ConsoleUI:
                 "failed": "[red]",
                 "pending": "[yellow]",
                 "skipped": "[dim]",
+                "running": "[cyan]",
             }.get(row.status, "")
             status_end = "[/]" if status_color else ""
 
@@ -151,13 +170,14 @@ class ConsoleUI:
     def show_api_status(self, status_list: list[dict]) -> None:
         """Display LLM API health check results as a table."""
         self.console.print()
-        self.console.rule("[bold]🔌 LLM API 状态", style="blue")
+        self.console.rule("[bold]LLM API 状态", style="#1D6FD6")
         table = Table(
             show_header=True,
-            header_style="bold white on #1F4E79",
-            border_style="blue",
+            header_style="bold white on #103A5C",
+            border_style="#1D6FD6",
         )
         table.add_column("Profile", style="bold", min_width=12)
+        table.add_column("类型", min_width=10)
         table.add_column("Model", min_width=16)
         table.add_column("状态", min_width=6, justify="center")
         table.add_column("延迟", justify="right", min_width=8)
@@ -167,7 +187,7 @@ class ConsoleUI:
             status = "[bold green]OK[/bold green]" if s["ok"] else "[bold red]FAIL[/bold red]"
             latency = f"{s['latency_ms']}ms" if s["latency_ms"] else "-"
             error = s.get("error", "")[:50]
-            table.add_row(s["profile"], s["model"], status, latency, error)
+            table.add_row(s["profile"], s.get("kind", "chat"), s["model"], status, latency, error)
 
         self.console.print(table)
 
@@ -176,14 +196,39 @@ class ConsoleUI:
         from model_test_agent.viz.graph_viz import print_graph_ascii
 
         self.console.print()
-        self.console.rule("[bold]🔀 工作流结构", style="blue")
+        self.console.rule("[bold]工作流结构", style="#1D6FD6")
         ascii_repr = print_graph_ascii(graph)
-        self.console.print(Panel(ascii_repr, border_style="cyan", padding=(0, 1)))
+        self.console.print(Panel(ascii_repr, border_style="#1D6FD6", padding=(0, 1)))
 
-    def show_completion(self, report_path: str) -> None:
+    def show_pipeline_error(self, step_name: str, error: str) -> None:
         self.console.print()
         self.console.print(Panel(
-            f"[bold green]✅ 分析完成[/bold green]\n"
-            f"报告已生成: [underline]{report_path}[/underline]",
+            f"[bold red]执行失败[/bold red]\n"
+            f"[bold]阶段:[/bold] {step_name}\n"
+            f"[bold]原因:[/bold] {error}",
+            border_style="red",
+            padding=(1, 2),
+        ))
+
+    def show_step_snapshot(self, step_name: str, lines: list[str]) -> None:
+        if not lines:
+            return
+        self.console.print(Panel(
+            "\n".join(lines),
+            title=f"[bold]{step_name}[/bold]",
+            border_style="#4BACC6",
+            padding=(0, 1),
+        ))
+
+    def show_completion(self, report_path: str, report_html_path: str = "") -> None:
+        lines = []
+        if report_path:
+            lines.append(f"XLSX: [underline]{report_path}[/underline]")
+        if report_html_path:
+            lines.append(f"HTML: [underline]{report_html_path}[/underline]")
+            lines.append(f"Access: [underline]{Path(report_html_path).resolve().as_uri()}[/underline]")
+        self.console.print()
+        self.console.print(Panel(
+            f"[bold green]分析完成[/bold green]\n" + "\n".join(lines),
             border_style="green",
         ))

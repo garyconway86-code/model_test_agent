@@ -111,14 +111,13 @@ class LogExtractor:
 
     def _match_line(self, line: str) -> tuple[str, str] | None:
         """Return ``(category, matched_keyword)`` or *None*."""
-        line_lower = line.lower()
         best: tuple[int, str, str] | None = None  # (priority, category, keyword)
 
         for cat_name, cat_cfg in self._categories.items():
             priority = cat_cfg.get("priority", 999)
             # Keyword match
             for kw in cat_cfg.get("keywords", []):
-                if kw.lower() in line_lower:
+                if self._keyword_matches(line, kw):
                     if best is None or priority < best[0]:
                         best = (priority, cat_name, kw)
                     break
@@ -130,3 +129,10 @@ class LogExtractor:
                     break
 
         return (best[1], best[2]) if best else None
+
+    @staticmethod
+    def _keyword_matches(line: str, keyword: str) -> bool:
+        escaped = re.escape(keyword)
+        prefix = r"(?<!\w)" if keyword[:1].isalnum() else ""
+        suffix = r"(?!\w)" if keyword[-1:].isalnum() else ""
+        return re.search(f"{prefix}{escaped}{suffix}", line, re.IGNORECASE) is not None
