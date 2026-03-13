@@ -142,19 +142,20 @@ class LLMClient:
             "error": "",
         }
         start = time.monotonic()
+        original_timeout = self._chat.request_timeout
         try:
             # Minimal request to test connectivity
-            original_timeout = self._chat.request_timeout
             self._chat.request_timeout = timeout
-            response = self._chat.invoke("ping")
+            self._chat.invoke("ping")
             elapsed = (time.monotonic() - start) * 1000
             result["ok"] = True
             result["latency_ms"] = round(elapsed, 1)
-            self._chat.request_timeout = original_timeout
         except Exception as exc:
             elapsed = (time.monotonic() - start) * 1000
             result["latency_ms"] = round(elapsed, 1)
             result["error"] = str(exc)
+        finally:
+            self._chat.request_timeout = original_timeout
         return result
 
     def __repr__(self) -> str:

@@ -76,6 +76,89 @@ class TestGraphConstruction:
         assert len(result["debug_results"]) == 1
         assert result["debug_results"][0].fix_status == FixStatus.SKIPPED
 
+    def test_classification_subgraph_forwards_llm_config_path(self, monkeypatch) -> None:
+        captured = {}
+
+        class DummySkill:
+            def __init__(self, llm_config_path=None):
+                captured["llm_config_path"] = llm_config_path
+
+            def run(self, errors, models=None):
+                return errors
+
+        monkeypatch.setattr(
+            "model_test_agent.graphs.classification_subgraph.ErrorClassifierSkill",
+            DummySkill,
+        )
+
+        graph = build_classification_subgraph().compile()
+        graph.invoke({
+            "errors": [ErrorEntry(model_name="m1", line_number=1, message="oops")],
+            "models": [],
+            "error_groups": {},
+            "llm_config_path": "/tmp/llm-alt.yaml",
+        })
+
+        assert captured["llm_config_path"] == "/tmp/llm-alt.yaml"
+
+    def test_debug_subgraph_preserves_successful_results_across_retries(self, monkeypatch) -> None:
+        analyzed_categories = []
+        executed_commands = []
+
+        class DummyRetriever:
+            def __init__(self, config_path=None):
+                self.config_path = config_path
+
+            def find_similar(self, category, key_log="", top_k=3):
+                return []
+
+        class DummySkill:
+            def __init__(self, llm_config_path=None):
+                assert llm_config_path == "/tmp/llm-alt.yaml"
+
+            def run(self, error_groups, models=None, history_per_category=None):
+                analyzed_categories.append(sorted(error_groups))
+                results = []
+                for category in error_groups:
+                    command = "fix-success" if category == "ok" else "fix-fail"
+                    results.append(DebugResult(error_category=category, fix_command=command))
+                return results
+
+        class DummyOutcome:
+            def __init__(self, success):
+                self.success = success
+                self.output = "done" if success else "failed"
+
+        def _run_fix(self, command):
+            executed_commands.append(command)
+            return DummyOutcome(success=command == "fix-success")
+
+        monkeypatch.setattr("model_test_agent.graphs.debug_subgraph.SemanticRetriever", DummyRetriever)
+        monkeypatch.setattr("model_test_agent.graphs.debug_subgraph.DebugAnalyzerSkill", DummySkill)
+        monkeypatch.setattr("model_test_agent.tools.docker_executor.DockerExecutor.run", _run_fix)
+
+        graph = build_debug_subgraph().compile()
+        result = graph.invoke({
+            "error_groups": {
+                "ok": [ErrorEntry(model_name="m1", line_number=1, message="ok")],
+                "bad": [ErrorEntry(model_name="m2", line_number=2, message="bad")],
+            },
+            "models": [],
+            "debug_results": [],
+            "retry_count": 0,
+            "max_retries": 1,
+            "auto_fix": True,
+            "llm_config_path": "/tmp/llm-alt.yaml",
+        })
+
+        assert analyzed_categories == [["bad", "ok"], ["bad"]]
+        assert executed_commands == ["fix-success", "fix-fail", "fix-fail"]
+        assert result["retry_count"] == 1
+        assert {item.error_category: item.fix_status for item in result["debug_results"]} == {
+            "ok": FixStatus.SUCCESS,
+            "bad": FixStatus.FAILED,
+        }
+
     def test_report_node_returns_html_path(self, monkeypatch, tmp_path) -> None:
         class DummyGenerator:
             def __init__(self, output_dir="."):

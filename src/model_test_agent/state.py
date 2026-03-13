@@ -86,6 +86,7 @@ class AgentState(TypedDict, total=False):
     log_dir: str
     config_path: str
     output_dir: str
+    llm_config_path: str
     auto_fix: bool
 
     # --- Extracted data ---
@@ -115,6 +116,7 @@ class ClassificationState(TypedDict, total=False):
     errors: list[ErrorEntry]
     error_groups: dict[str, list[ErrorEntry]]
     models: list[ModelInfo]
+    llm_config_path: str
 
 
 class DebugState(TypedDict, total=False):
@@ -125,6 +127,7 @@ class DebugState(TypedDict, total=False):
     retry_count: int
     max_retries: int
     auto_fix: bool
+    llm_config_path: str
 
 
 class SNRState(TypedDict, total=False):

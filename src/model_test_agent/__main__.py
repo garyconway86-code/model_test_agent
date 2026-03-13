@@ -76,6 +76,7 @@ def _interactive_setup() -> dict:
         "log_dir": log_dir,
         "config_path": config_path,
         "output_dir": output_dir,
+        "llm_config_path": "",
         "mode": mode,
         "auto_fix": auto_fix,
     }
@@ -150,7 +151,7 @@ def _format_error_sample(err) -> str:
 
 
 def _step_snapshot_lines(step_key: str, state: dict) -> list[str]:
-    if step_key == "extract" and not state.get("errors"):
+    if step_key == "extract" and "errors" not in state and "models" not in state:
         log_dir = Path(state.get("log_dir", ""))
         config_path = state.get("config_path") or "-"
         log_files = [str(p) for p in sorted(log_dir.rglob("*.log"))[:3]] if log_dir.is_dir() else []
@@ -215,7 +216,7 @@ def _step_snapshot_lines(step_key: str, state: dict) -> list[str]:
 
 
 def _step_snapshot_title(step_key: str, state: dict) -> str:
-    if step_key == "extract" and not state.get("errors"):
+    if step_key == "extract" and "errors" not in state and "models" not in state:
         return t("snapshot_inputs")
     return {
         "extract": t("snapshot_extract"),
@@ -235,6 +236,7 @@ def _run_full_pipeline(
     log_dir: str,
     config_path: str,
     output_dir: str,
+    llm_config_path: str,
     max_retries: int,
     auto_fix: bool,
 ) -> None:
@@ -253,12 +255,8 @@ def _run_full_pipeline(
             "log_dir": log_dir,
             "config_path": config_path,
             "output_dir": output_dir,
+            "llm_config_path": llm_config_path,
             "auto_fix": auto_fix,
-            "errors": [],
-            "models": [],
-            "error_groups": {},
-            "debug_results": [],
-            "report_rows": [],
             "max_retries": max_retries,
             "retry_count": 0,
         }
@@ -328,7 +326,7 @@ def _run_full_pipeline(
         ui.show_completion(report_path, report_html_path)
 
 
-def _run_classify_only(log_dir: str, config_path: str, output_dir: str) -> None:
+def _run_classify_only(log_dir: str, config_path: str, output_dir: str, llm_config_path: str) -> None:
     """Run only the classification subgraph."""
     from model_test_agent.graphs.classification_subgraph import build_classification_subgraph
     from model_test_agent.tools.config_reader import ConfigReader
@@ -346,7 +344,12 @@ def _run_classify_only(log_dir: str, config_path: str, output_dir: str) -> None:
 
     console.print(f"[bold blue]{t('step_classify')}...[/bold blue]")
     graph = build_classification_subgraph().compile()
-    result = graph.invoke({"errors": errors, "models": models, "error_groups": {}})
+    result = graph.invoke({
+        "errors": errors,
+        "models": models,
+        "error_groups": {},
+        "llm_config_path": llm_config_path,
+    })
     _show_step_snapshot("classification", {"errors": result.get("errors", errors), "error_groups": result.get("error_groups", {})})
 
     ui.show_extraction_summary(errors, models)
@@ -360,6 +363,7 @@ def _run_debug_only(
     log_dir: str,
     config_path: str,
     output_dir: str,
+    llm_config_path: str,
     max_retries: int,
     auto_fix: bool,
 ) -> None:
@@ -378,7 +382,12 @@ def _run_debug_only(
 
     console.print(f"[bold blue]{t('step_classify')}...[/bold blue]")
     cls_graph = build_classification_subgraph().compile()
-    cls_result = cls_graph.invoke({"errors": errors, "models": models, "error_groups": {}})
+    cls_result = cls_graph.invoke({
+        "errors": errors,
+        "models": models,
+        "error_groups": {},
+        "llm_config_path": llm_config_path,
+    })
     _show_step_snapshot("classification", {"errors": cls_result.get("errors", errors), "error_groups": cls_result.get("error_groups", {})})
 
     console.print(f"[bold blue]{t('step_debug')}...[/bold blue]")
@@ -390,6 +399,7 @@ def _run_debug_only(
         "retry_count": 0,
         "max_retries": max_retries,
         "auto_fix": auto_fix,
+        "llm_config_path": llm_config_path,
     })
     _show_step_snapshot("debug", {"debug_results": dbg_result.get("debug_results", [])})
 
@@ -491,6 +501,7 @@ def main() -> None:
             "log_dir": args.log_dir,
             "config_path": args.config or "",
             "output_dir": args.output,
+            "llm_config_path": args.llm_config or "",
             "mode": args.mode,
             "auto_fix": args.auto_fix,
         }
@@ -498,6 +509,7 @@ def main() -> None:
     log_dir = settings["log_dir"]
     config_path = settings["config_path"]
     output_dir = settings["output_dir"]
+    llm_config_path = settings.get("llm_config_path", "")
     mode = settings["mode"]
 
     # Validate log directory
@@ -508,11 +520,11 @@ def main() -> None:
     Path(output_dir).mkdir(parents=True, exist_ok=True)
 
     if mode == "full":
-        _run_full_pipeline(log_dir, config_path, output_dir, args.max_retries, settings["auto_fix"])
+        _run_full_pipeline(log_dir, config_path, output_dir, llm_config_path, args.max_retries, settings["auto_fix"])
     elif mode == "classify":
-        _run_classify_only(log_dir, config_path, output_dir)
+        _run_classify_only(log_dir, config_path, output_dir, llm_config_path)
     elif mode == "debug":
-        _run_debug_only(log_dir, config_path, output_dir, args.max_retries, settings["auto_fix"])
+        _run_debug_only(log_dir, config_path, output_dir, llm_config_path, args.max_retries, settings["auto_fix"])
     elif mode == "snr":
         _run_snr_only(config_path)
 

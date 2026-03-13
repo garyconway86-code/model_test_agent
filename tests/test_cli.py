@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import sys
 
+from model_test_agent import __main__ as cli
 from model_test_agent.__main__ import _parse_args, _step_snapshot_lines, _step_snapshot_title
 from model_test_agent.state import ErrorEntry
 
@@ -81,6 +82,32 @@ class TestCLIHelpers:
 
     def test_snapshot_titles_match_panel_content(self) -> None:
         assert _step_snapshot_title("extract", {"log_dir": "/tmp/x", "config_path": "/tmp/y"}) == "输入路径"
-        assert _step_snapshot_title("extract", {"errors": [], "models": []}) == "输入路径"
+        assert _step_snapshot_title("extract", {"errors": [], "models": []}) == "提取摘要"
         assert _step_snapshot_title("extract", {"errors": [object()], "models": []}) == "提取摘要"
         assert _step_snapshot_title("classification", {"errors": [], "error_groups": {}}) == "分类摘要"
+
+    def test_extract_snapshot_with_zero_errors_is_a_summary(self) -> None:
+        lines = _step_snapshot_lines("extract", {"errors": [], "models": []})
+
+        assert lines == ["errors: 0", "models: 0", "top_models: -"]
+
+    def test_main_forwards_llm_config_to_full_pipeline(self, monkeypatch, tmp_path) -> None:
+        captured = {}
+
+        monkeypatch.setattr(
+            sys,
+            "argv",
+            [
+                "model-test-agent",
+                "--skip-health-check",
+                "--log-dir",
+                str(tmp_path),
+                "--llm-config",
+                str(tmp_path / "llm.yaml"),
+            ],
+        )
+        monkeypatch.setattr(cli, "_run_full_pipeline", lambda *args: captured.setdefault("args", args))
+
+        cli.main()
+
+        assert captured["args"][3] == str(tmp_path / "llm.yaml")

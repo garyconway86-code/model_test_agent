@@ -28,7 +28,7 @@ def _group_errors(state: ClassificationState) -> dict[str, Any]:
 
 def _llm_classify(state: ClassificationState) -> dict[str, Any]:
     """Invoke the ErrorClassifierSkill for LLM-based refinement."""
-    skill = ErrorClassifierSkill()
+    skill = ErrorClassifierSkill(llm_config_path=state.get("llm_config_path"))
     errors = state.get("errors", [])
     models = state.get("models", [])
     refined = skill.run(errors=errors, models=models)

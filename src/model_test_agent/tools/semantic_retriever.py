@@ -9,12 +9,10 @@ the embedding service is unavailable or misconfigured.
 
 from __future__ import annotations
 
-import math
-import urllib.error
-import urllib.parse
-import urllib.request
 import json
 import logging
+import math
+import urllib.request
 from typing import Any
 
 from openai import OpenAI
@@ -50,12 +48,12 @@ class SemanticRetriever:
         store: HistoryStore | None = None,
         embed_profile: str = "embedding",
         rerank_profile: str = "reranker",
+        config_path: str | None = None,
     ) -> None:
         self._store = store or HistoryStore()
-        profiles = _load_profiles()
+        profiles = _load_profiles(config_path) if config_path else _load_profiles()
         self._embed_cfg = profiles.get(embed_profile)
         self._rerank_cfg = profiles.get(rerank_profile)
-        self._use_semantic = self._probe_embedding()
 
     # ------------------------------------------------------------------
     # Public API
@@ -71,12 +69,11 @@ class SemanticRetriever:
 
         Falls back to keyword scoring if the embedding service is down.
         """
-        if not self._use_semantic:
-            return self._store.find_similar(error_category, key_log, top_k)
-
         cases = self._store.get_all()
         if not cases:
             return []
+        if not self._embed_cfg:
+            return self._store.find_similar(error_category, key_log, top_k)
 
         query = f"{error_category}: {key_log}"
         texts = [f"{c['error_category']}: {c.get('key_log', '')}" for c in cases]
@@ -104,22 +101,6 @@ class SemanticRetriever:
     # ------------------------------------------------------------------
     # Internal helpers
     # ------------------------------------------------------------------
-
-    def _probe_embedding(self) -> bool:
-        """Return True if the embedding service is reachable."""
-        if not self._embed_cfg:
-            return False
-        try:
-            client = OpenAI(
-                base_url=self._embed_cfg["base_url"],
-                api_key=self._embed_cfg["api_key"],
-                timeout=5,
-            )
-            client.embeddings.create(model=self._embed_cfg["model"], input=["ping"])
-            return True
-        except Exception as exc:
-            logger.info("Embedding service unavailable (%s), using keyword fallback.", exc)
-            return False
 
     def _embed(self, texts: list[str]) -> tuple[list[float], list[list[float]]]:
         """Embed *texts* and return (query_vec, case_vecs)."""

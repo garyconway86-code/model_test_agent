@@ -23,11 +23,24 @@ from model_test_agent.tools.semantic_retriever import SemanticRetriever
 
 def _analyze(state: DebugState) -> dict[str, Any]:
     """Run the DebugAnalyzerSkill on all error groups."""
-    skill = DebugAnalyzerSkill()
-    retriever = SemanticRetriever()
-
     error_groups = state.get("error_groups", {})
     models = state.get("models", [])
+    llm_config_path = state.get("llm_config_path")
+    existing_results = {result.error_category: result for result in state.get("debug_results", [])}
+
+    pending_groups = {
+        category: errors
+        for category, errors in error_groups.items()
+        if existing_results.get(category, DebugResult(error_category=category)).fix_status in (
+            FixStatus.PENDING,
+            FixStatus.FAILED,
+        )
+    }
+    if not pending_groups:
+        return {"debug_results": list(existing_results.values())}
+
+    skill = DebugAnalyzerSkill(llm_config_path=llm_config_path)
+    retriever = SemanticRetriever(config_path=llm_config_path)
 
     # Retrieve relevant history per category before calling the LLM.
     history_per_category = {
@@ -36,15 +49,24 @@ def _analyze(state: DebugState) -> dict[str, Any]:
             key_log=errors[0].message if errors else "",
             top_k=3,
         )
-        for category, errors in error_groups.items()
+        for category, errors in pending_groups.items()
     }
 
-    results = skill.run(
-        error_groups=error_groups,
+    refreshed_results = skill.run(
+        error_groups=pending_groups,
         models=models,
         history_per_category=history_per_category,
     )
-    return {"debug_results": results, "retry_count": 0}
+    results = [
+        existing_results[category]
+        for category in error_groups
+        if category in existing_results and category not in pending_groups
+    ]
+    refreshed_map = {result.error_category: result for result in refreshed_results}
+    for category in error_groups:
+        if category in refreshed_map:
+            results.append(refreshed_map[category])
+    return {"debug_results": results}
 
 
 def _execute_fix(state: DebugState) -> dict[str, Any]:

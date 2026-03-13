@@ -14,6 +14,7 @@ from model_test_agent.tools.docker_executor import DockerExecutor
 from model_test_agent.tools.history_store import HistoryStore
 from model_test_agent.tools.log_extractor import LogExtractor
 from model_test_agent.tools.report_generator import ReportGenerator
+from model_test_agent.tools.semantic_retriever import SemanticRetriever
 from model_test_agent.viz import charts
 
 
@@ -152,6 +153,31 @@ class TestHistoryStore:
         # New instance should see the persisted case
         store2 = HistoryStore(store_path)
         assert len(store2.get_all()) == 1
+
+
+class TestSemanticRetriever:
+    def test_empty_history_does_not_call_embedding_api(self, monkeypatch, tmp_path: Path) -> None:
+        store_path = tmp_path / "cases.json"
+        store_path.write_text("[]")
+        store = HistoryStore(store_path)
+
+        monkeypatch.setattr(
+            "model_test_agent.tools.semantic_retriever._load_profiles",
+            lambda config_path=None: {
+                "embedding": {"base_url": "https://example.invalid/v1", "api_key": "x", "model": "embed"},
+                "reranker": {"base_url": "https://example.invalid", "api_key": "x", "model": "rerank", "top_n": 3},
+            },
+        )
+
+        class UnexpectedClient:
+            def __init__(self, *args, **kwargs):
+                raise AssertionError("Embedding client should not be created when history is empty")
+
+        monkeypatch.setattr("model_test_agent.tools.semantic_retriever.OpenAI", UnexpectedClient)
+
+        retriever = SemanticRetriever(store=store)
+
+        assert retriever.find_similar("shape_mismatch", "shape mismatch", top_k=3) == []
 
 
 # ------------------------------------------------------------------
