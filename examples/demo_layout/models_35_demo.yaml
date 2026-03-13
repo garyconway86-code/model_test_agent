@@ -1,0 +1,30 @@
+models:
+  - name: 01-1_yolo
+    quantization: int8
+    has_test_data: true
+    config_path: ../demo_models/Models_35/01-1_yolo/model_config.yaml
+    log_path: ../demo_models/Models_35/01-1_yolo/runs/20260312_101500/convert.log
+    package_info_path: ../demo_models/Models_35/01-1_yolo/package_info.json
+    extra:
+      framework: pytorch
+      task: detection
+
+  - name: 02-1_qwen2
+    quantization: int4
+    has_test_data: false
+    config_path: ../demo_models/Models_35/02-1_qwen2/model_config.yaml
+    log_path: ../demo_models/Models_35/02-1_qwen2/runs/20260312_104200/convert.log
+    package_info_path: ../demo_models/Models_35/02-1_qwen2/package_info.json
+    extra:
+      framework: pytorch
+      task: llm
+
+  - name: 03-1_resnet
+    quantization: fp16
+    has_test_data: true
+    config_path: ../demo_models/Models_35/03-1_resnet/model_config.yaml
+    log_path: ../demo_models/Models_35/03-1_resnet/runs/20260312_111000/convert.log
+    package_info_path: ../demo_models/Models_35/03-1_resnet/package_info.json
+    extra:
+      framework: pytorch
+      task: classification

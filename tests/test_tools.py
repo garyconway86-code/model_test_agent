@@ -50,6 +50,17 @@ class TestLogExtractor:
         model_names = {e.model_name for e in entries}
         assert model_names == {"model_a", "model_b"}
 
+    def test_extract_from_nested_directory_uses_model_folder_name(self, tmp_path: Path) -> None:
+        log_path = tmp_path / "Models_35" / "01-1_yolo" / "run_001" / "convert.log"
+        log_path.parent.mkdir(parents=True)
+        log_path.write_text("[ERROR] Shape mismatch at output\n", encoding="utf-8")
+
+        extractor = LogExtractor(context_lines=0)
+        entries = extractor.extract_from_directory(tmp_path / "Models_35")
+
+        assert len(entries) == 1
+        assert entries[0].model_name == "01-1_yolo"
+
     def test_no_errors_returns_empty(self, tmp_path: Path) -> None:
         log = tmp_path / "clean.log"
         log.write_text("[INFO] All good\n[INFO] Conversion successful\n")
@@ -110,6 +121,36 @@ class TestConfigReader:
     def test_nonexistent_file_raises(self) -> None:
         with pytest.raises(FileNotFoundError):
             ConfigReader.read_file("/nonexistent/config.yaml")
+
+    def test_read_directory_recursively(self, tmp_path: Path) -> None:
+        model_a = tmp_path / "Models_35" / "01-1_yolo" / "config.yaml"
+        model_b = tmp_path / "Models_35" / "02-1_bert" / "meta.yml"
+        model_a.parent.mkdir(parents=True)
+        model_b.parent.mkdir(parents=True)
+        model_a.write_text("name: 01-1_yolo\nquantization: int8\n", encoding="utf-8")
+        model_b.write_text("name: 02-1_bert\nhas_test_data: true\n", encoding="utf-8")
+
+        models = ConfigReader.read_file(tmp_path / "Models_35")
+
+        assert [model.name for model in models] == ["01-1_yolo", "02-1_bert"]
+        assert str(model_a) in {model.config_path for model in models}
+
+    def test_read_file_resolves_relative_model_paths(self, tmp_path: Path) -> None:
+        cfg = tmp_path / "models.yaml"
+        cfg.write_text(
+            "models:\n"
+            "  - name: 01-1_yolo\n"
+            "    config_path: Models_35/01-1_yolo/model.yaml\n"
+            "    log_path: Models_35/01-1_yolo/run_001/convert.log\n"
+            "    package_info_path: Models_35/01-1_yolo/package_info.json\n",
+            encoding="utf-8",
+        )
+
+        models = ConfigReader.read_file(cfg)
+
+        assert models[0].config_path == str((tmp_path / "Models_35/01-1_yolo/model.yaml").resolve())
+        assert models[0].log_path == str((tmp_path / "Models_35/01-1_yolo/run_001/convert.log").resolve())
+        assert models[0].package_info_path == str((tmp_path / "Models_35/01-1_yolo/package_info.json").resolve())
 
 
 # ------------------------------------------------------------------
@@ -214,6 +255,9 @@ class TestReportGenerator:
         return [
             ReportRow(
                 model_name="resnet50",
+                log_path="/tmp/resnet50.log",
+                log_line=3,
+                package_summary="demo-kit | v1.2.3",
                 quantization="int8",
                 has_test_data="是",
                 error_category="shape_mismatch",
@@ -227,6 +271,9 @@ class TestReportGenerator:
             ),
             ReportRow(
                 model_name="bert-base",
+                log_path="/tmp/bert-base.log",
+                log_line=7,
+                package_summary="demo-kit | v1.2.4",
                 quantization="fp16",
                 has_test_data="是",
                 error_category="dtype_error",
@@ -247,13 +294,35 @@ class TestReportGenerator:
         assert path.suffix == ".xlsx"
 
     def test_generate_html(self, tmp_path: Path, sample_rows: list[ReportRow]) -> None:
+        (tmp_path / "resnet50.log").write_text("line1\nline2\nshape mismatch\n", encoding="utf-8")
+        (tmp_path / "bert-base.log").write_text("a\nb\nc\nd\ne\nf\nunsupported dtype\n", encoding="utf-8")
+        sample_rows[0].log_path = str((tmp_path / "resnet50.log").resolve())
+        sample_rows[1].log_path = str((tmp_path / "bert-base.log").resolve())
+
         gen = ReportGenerator(output_dir=tmp_path)
-        path = gen.generate_html(sample_rows, filename="test.html")
+        path = gen.generate_html(
+            sample_rows,
+            filename="test.html",
+            summary={"total_models": 4, "passed_models": 2, "failed_models": 2},
+            agent_info={
+                "classifier_model": "deepseek-chat",
+                "debugger_model": "deepseek-chat",
+                "assisted_fields": "error_category, suggested_fix, root_cause",
+            },
+        )
         assert path.exists()
         content = path.read_text()
         assert "resnet50" in content
         assert "bert-base" in content
         assert "shape_mismatch" in content
+        assert "View Source" in content
+        assert "Open File" in content
+        assert "shape mismatch" in content
+        assert "Passed Models" in content
+        assert ">2</div>" in content
+        assert "Agent Assist" in content
+        assert "deepseek-chat" in content
+        assert "demo-kit | v1.2.3" in content
 
 
 class TestCharts:

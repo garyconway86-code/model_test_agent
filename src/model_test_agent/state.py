@@ -32,6 +32,8 @@ class ModelInfo:
     quantization: str = "fp32"
     has_test_data: bool = False
     config_path: str = ""
+    log_path: str = ""
+    package_info_path: str = ""
     extra: dict[str, Any] = field(default_factory=dict)
 
 
@@ -42,6 +44,7 @@ class ErrorEntry:
     model_name: str
     line_number: int
     message: str
+    log_path: str = ""
     raw_context: str = ""
     category: str = "unknown"
     matched_keyword: str = ""
@@ -67,6 +70,9 @@ class ReportRow:
     """One row in the final summary report."""
 
     model_name: str = ""
+    log_path: str = ""
+    log_line: int = 0
+    package_summary: str = ""
     quantization: str = ""
     has_test_data: str = ""
     error_category: str = ""

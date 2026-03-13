@@ -17,11 +17,15 @@ as nodes, so they can also be invoked independently.
 
 from __future__ import annotations
 
+import glob
+import json
+from pathlib import Path
 from typing import Any
 
 from langgraph.graph import END, StateGraph
 
 from model_test_agent.graphs.classification_subgraph import build_classification_subgraph
+from model_test_agent.llm.client import _load_profiles
 from model_test_agent.graphs.debug_subgraph import build_debug_subgraph
 from model_test_agent.state import (
     AgentState,
@@ -46,13 +50,20 @@ def _extract(state: AgentState) -> dict[str, Any]:
     log_dir = state.get("log_dir", "")
     config_path = state.get("config_path", "")
 
-    extractor = LogExtractor()
-    errors = extractor.extract_from_directory(log_dir) if log_dir else []
-
     models: list[ModelInfo] = []
     if config_path:
         reader = ConfigReader()
         models = reader.read_file(config_path)
+
+    extractor = LogExtractor()
+    errors: list[ErrorEntry] = []
+    explicit_logs = [m for m in models if m.log_path]
+    if explicit_logs:
+        for model in explicit_logs:
+            for path in _expand_paths(model.log_path):
+                errors.extend(extractor.extract_from_file(path, model_name=model.name))
+    elif log_dir:
+        errors = extractor.extract_from_directory(log_dir)
 
     return {"errors": errors, "models": models}
 
@@ -83,14 +94,18 @@ def _report(state: AgentState) -> dict[str, Any]:
     """Node 6: generate the summary report (XLSX + HTML)."""
     debug_results = state.get("debug_results", [])
     errors = state.get("errors", [])
-    models_map = {m.name: m for m in state.get("models", [])}
-    error_groups = state.get("error_groups", {})
+    models = state.get("models", [])
+    models_map = {m.name: m for m in models}
 
     # Build per-model report rows
     rows: list[ReportRow] = []
     model_errors: dict[str, list[ErrorEntry]] = {}
     for err in errors:
         model_errors.setdefault(err.model_name, []).append(err)
+    known_models = {m.name for m in models}
+    error_models = set(model_errors)
+    if not known_models:
+        known_models = error_models
 
     # Map category → debug result
     dr_map: dict[str, DebugResult] = {dr.error_category: dr for dr in debug_results}
@@ -106,6 +121,9 @@ def _report(state: AgentState) -> dict[str, Any]:
             dr = dr_map.get(cat)
             rows.append(ReportRow(
                 model_name=model_name,
+                log_path=cat_errs[0].log_path if cat_errs else "",
+                log_line=cat_errs[0].line_number if cat_errs else 0,
+                package_summary=_load_package_summary(m),
                 quantization=m.quantization if m else "",
                 has_test_data="是" if (m and m.has_test_data) else "否",
                 error_category=cat,
@@ -118,14 +136,94 @@ def _report(state: AgentState) -> dict[str, Any]:
                 status=dr.fix_status.value if dr else "pending",
             ))
 
+    for model_name in sorted(known_models - error_models):
+        m = models_map.get(model_name)
+        rows.append(ReportRow(
+            model_name=model_name,
+            package_summary=_load_package_summary(m),
+            quantization=m.quantization if m else "",
+            has_test_data="是" if (m and m.has_test_data) else "否",
+            error_category="no_error",
+            error_count=0,
+            key_log_snippet="No error detected",
+            history_match="否",
+            suggested_fix="",
+            fix_executed="否",
+            fix_result="success",
+            status="success",
+        ))
+
+    summary = {
+        "total_models": len(known_models),
+        "passed_models": len(known_models - error_models),
+        "failed_models": len(error_models),
+    }
+    agent_info = _build_agent_info(state.get("llm_config_path", ""))
+
     gen = ReportGenerator(output_dir=state.get("output_dir", "."))
     xlsx_path = gen.generate_xlsx(rows)
-    html_path = gen.generate_html(rows)
+    html_path = gen.generate_html(rows, summary=summary, agent_info=agent_info)
 
     return {
         "report_rows": rows,
         "report_path": str(xlsx_path),
         "report_html_path": str(html_path),
+    }
+
+
+def _expand_paths(path_pattern: str) -> list[Path]:
+    if not any(token in path_pattern for token in "*?[]"):
+        path = Path(path_pattern)
+        return [path] if path.exists() else []
+    return [Path(match) for match in sorted(glob.glob(path_pattern)) if Path(match).is_file()]
+
+
+def _load_package_summary(model: ModelInfo | None) -> str:
+    if not model:
+        return ""
+    package_path = model.package_info_path or _default_package_info_path(model.config_path)
+    if not package_path:
+        return ""
+    try:
+        data = json.loads(Path(package_path).read_text(encoding="utf-8"))
+    except (OSError, json.JSONDecodeError):
+        return ""
+
+    parts = []
+    name = data.get("package_name") or data.get("name")
+    version = data.get("version")
+    build = data.get("build")
+    commit = data.get("git_commit") or data.get("commit")
+    if name:
+        parts.append(str(name))
+    if version:
+        parts.append(f"v{version}")
+    if build:
+        parts.append(f"build {build}")
+    if commit:
+        parts.append(f"commit {str(commit)[:8]}")
+    return " | ".join(parts)
+
+
+def _default_package_info_path(config_path: str) -> str:
+    if not config_path:
+        return ""
+    path = Path(config_path)
+    candidate = path.parent / "package_info.json"
+    return str(candidate) if candidate.exists() else ""
+
+
+def _build_agent_info(llm_config_path: str) -> dict[str, str]:
+    try:
+        profiles = _load_profiles(llm_config_path) if llm_config_path else _load_profiles()
+    except Exception:
+        profiles = {}
+    classifier = profiles.get("classifier", {})
+    debugger = profiles.get("debugger", {})
+    return {
+        "classifier_model": str(classifier.get("model", "-")),
+        "debugger_model": str(debugger.get("model", "-")),
+        "assisted_fields": "error_category, suggested_fix, root_cause",
     }
 
 

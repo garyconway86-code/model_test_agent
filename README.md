@@ -97,6 +97,22 @@ model-test-agent \
   --mode classify
 ```
 
+更贴近真实目录结构的 demo：
+
+```bash
+model-test-agent \
+  --log-dir examples/demo_models/Models_35 \
+  --config examples/demo_layout/models_35_demo.yaml \
+  --output ./output/demo \
+  --mode full
+```
+
+这个 demo 里每个模型都可以在配置里显式指定：
+- `log_path`: 当前模型本次运行的日志文件路径
+- `package_info_path`: 当前模型目录下的 `package_info.json`
+
+显式路径存在时，Agent 会优先使用这些固定路径，而不是自己猜目录结构。
+
 ### `python -m` 什么时候用
 
 ```bash

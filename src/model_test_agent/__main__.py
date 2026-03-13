@@ -206,10 +206,13 @@ def _step_snapshot_lines(step_key: str, state: dict) -> list[str]:
         ]
 
     if step_key == "report":
+        report_html_path = state.get("report_html_path", "")
+        viewer_path = Path(report_html_path).resolve().as_uri() if report_html_path else "-"
         return [
             f"report_rows: {len(state.get('report_rows', []))}",
             f"report_path: {state.get('report_path', '-')}",
-            f"report_html: {state.get('report_html_path', '-')}",
+            f"report_html: {report_html_path or '-'}",
+            f"viewer: {viewer_path}",
         ]
 
     return []
@@ -493,12 +496,12 @@ def main() -> None:
                 console.print(f"  图结构已导出: [underline]{out}[/underline]")
         return
 
-    # If no log_dir provided, enter interactive mode
-    if not args.log_dir:
+    # If neither explicit args nor config is provided, enter interactive mode
+    if not args.log_dir and not args.config:
         settings = _interactive_setup()
     else:
         settings = {
-            "log_dir": args.log_dir,
+            "log_dir": args.log_dir or "",
             "config_path": args.config or "",
             "output_dir": args.output,
             "llm_config_path": args.llm_config or "",
@@ -513,8 +516,11 @@ def main() -> None:
     mode = settings["mode"]
 
     # Validate log directory
-    if mode != "snr" and not Path(log_dir).is_dir():
+    if mode != "snr" and log_dir and not Path(log_dir).is_dir():
         console.print(f"[bold red]{t('error_no_logs')}: {log_dir}[/bold red]")
+        sys.exit(1)
+    if mode != "snr" and not log_dir and not config_path:
+        console.print(f"[bold red]{t('error_no_logs')}[/bold red]")
         sys.exit(1)
 
     Path(output_dir).mkdir(parents=True, exist_ok=True)

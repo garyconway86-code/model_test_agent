@@ -226,7 +226,9 @@ class ConsoleUI:
             lines.append(f"XLSX: [underline]{report_path}[/underline]")
         if report_html_path:
             lines.append(f"HTML: [underline]{report_html_path}[/underline]")
-            lines.append(f"Access: [underline]{Path(report_html_path).resolve().as_uri()}[/underline]")
+            lines.append(
+                f"Interactive Viewer: [underline]{Path(report_html_path).resolve().as_uri()}[/underline]"
+            )
         self.console.print()
         self.console.print(Panel(
             f"[bold green]分析完成[/bold green]\n" + "\n".join(lines),

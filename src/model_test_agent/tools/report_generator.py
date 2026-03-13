@@ -7,6 +7,7 @@ customisable without touching code.
 from __future__ import annotations
 
 from datetime import datetime
+import html
 from pathlib import Path
 from typing import Any
 
@@ -114,7 +115,13 @@ class ReportGenerator:
     # HTML
     # ------------------------------------------------------------------
 
-    def generate_html(self, rows: list[ReportRow], filename: str | None = None) -> Path:
+    def generate_html(
+        self,
+        rows: list[ReportRow],
+        filename: str | None = None,
+        summary: dict[str, int] | None = None,
+        agent_info: dict[str, str] | None = None,
+    ) -> Path:
         """Write a self-contained HTML report and return the file path."""
         html_cfg = self._cfg.get("html", {})
         xlsx_cfg = self._cfg.get("xlsx", {})
@@ -128,17 +135,31 @@ class ReportGenerator:
         title = html_cfg.get("title", "Model Conversion Test Report")
 
         # Build table rows
-        header_cells = "".join(f'<th>{c["header"]}</th>' for c in columns)
+        header_cells = "".join(f'<th>{html.escape(c["header"])}</th>' for c in columns)
+        header_cells += "<th>Log</th>"
         body_rows = []
+        log_cache: dict[str, str] = {}
         for i, report_row in enumerate(rows):
             rd = self._row_to_dict(report_row)
             cls = ' class="alt"' if i % 2 == 1 else ""
-            cells = "".join(f"<td>{rd.get(c['key'], '')}</td>" for c in columns)
-            body_rows.append(f"  <tr{cls}>{cells}</tr>")
+            cells = "".join(
+                f"<td>{html.escape(str(rd.get(c['key'], '')))}</td>"
+                for c in columns
+            )
+            log_id = f"log-{i}"
+            body_rows.append(
+                f'  <tr{cls}>{cells}<td class="log-actions">{self._build_log_actions(report_row, log_id)}</td></tr>'
+            )
+            if report_row.log_path:
+                body_rows.append(self._build_log_detail(report_row, len(columns) + 1, log_id, log_cache))
         body_html = "\n".join(body_rows)
 
         # Statistics for the summary section
-        total = len(rows)
+        summary = summary or {}
+        total_models = summary.get("total_models", len({row.model_name for row in rows}))
+        passed_models = summary.get("passed_models", 0)
+        failed_models = summary.get("failed_models", len({row.model_name for row in rows}))
+        agent_info = agent_info or {}
         by_category: dict[str, int] = {}
         by_status: dict[str, int] = {}
         for r in rows:
@@ -152,18 +173,23 @@ class ReportGenerator:
             f"<tr><td>{st}</td><td>{cnt}</td></tr>" for st, cnt in sorted(by_status.items())
         )
 
-        html = _HTML_TEMPLATE.format(
+        html_output = _HTML_TEMPLATE.format(
             title=title,
             header_cells=header_cells,
             body_rows=body_html,
-            total=total,
+            total_models=total_models,
+            passed_models=passed_models,
+            failed_models=failed_models,
             stats_rows=stats_rows,
             status_rows=status_rows,
+            classifier_model=html.escape(agent_info.get("classifier_model", "-")),
+            debugger_model=html.escape(agent_info.get("debugger_model", "-")),
+            assisted_fields=html.escape(agent_info.get("assisted_fields", "")),
             timestamp=datetime.now().strftime("%Y-%m-%d %H:%M:%S"),
         )
 
         out_path = self.output_dir / filename
-        out_path.write_text(html, encoding="utf-8")
+        out_path.write_text(html_output, encoding="utf-8")
         return out_path
 
     # ------------------------------------------------------------------
@@ -174,6 +200,9 @@ class ReportGenerator:
     def _row_to_dict(row: ReportRow) -> dict[str, Any]:
         return {
             "model_name": row.model_name,
+            "log_path": row.log_path,
+            "log_line": row.log_line,
+            "package_summary": row.package_summary,
             "quantization": row.quantization,
             "has_test_data": row.has_test_data,
             "error_category": row.error_category,
@@ -190,6 +219,7 @@ class ReportGenerator:
     def _default_columns() -> list[dict[str, Any]]:
         return [
             {"key": "model_name", "header": "Model Name", "width": 28},
+            {"key": "package_summary", "header": "Package", "width": 28},
             {"key": "quantization", "header": "Quantization", "width": 14},
             {"key": "has_test_data", "header": "Has Test Data", "width": 13},
             {"key": "error_category", "header": "Error Category", "width": 18},
@@ -201,6 +231,59 @@ class ReportGenerator:
             {"key": "fix_result", "header": "Fix Result", "width": 18},
             {"key": "status", "header": "Status", "width": 12},
         ]
+
+    @staticmethod
+    def _build_log_actions(row: ReportRow, log_id: str) -> str:
+        if not row.log_path:
+            return '<span class="muted">-</span>'
+        file_link = Path(row.log_path).resolve().as_uri()
+        return (
+            f'<button type="button" class="log-toggle" data-target="{log_id}">View Source</button>'
+            f'<a class="log-link" href="{html.escape(file_link)}" target="_blank" rel="noopener noreferrer">'
+            "Open File</a>"
+        )
+
+    @classmethod
+    def _build_log_detail(
+        cls,
+        row: ReportRow,
+        colspan: int,
+        log_id: str,
+        log_cache: dict[str, str],
+    ) -> str:
+        source = cls._read_log_source(row.log_path, log_cache)
+        line_label = f"line {row.log_line}" if row.log_line else "unknown line"
+        return (
+            f'  <tr id="{log_id}" class="log-detail-row" hidden>'
+            f'<td colspan="{colspan}">'
+            f'<div class="log-detail-meta">{html.escape(row.log_path)} ({line_label})</div>'
+            f'<pre class="log-detail"><code>{cls._format_log_source(source, row.log_line)}</code></pre>'
+            "</td></tr>"
+        )
+
+    @staticmethod
+    def _read_log_source(log_path: str, log_cache: dict[str, str]) -> str:
+        if log_path in log_cache:
+            return log_cache[log_path]
+        path = Path(log_path)
+        try:
+            content = path.read_text(encoding="utf-8", errors="replace")
+        except OSError as exc:
+            content = f"[Unable to read log file] {exc}"
+        log_cache[log_path] = content
+        return content
+
+    @staticmethod
+    def _format_log_source(source: str, highlight_line: int) -> str:
+        if not source:
+            return html.escape("[Empty log]")
+        rendered_lines = []
+        for index, line in enumerate(source.splitlines(), start=1):
+            css_class = ' class="hit"' if index == highlight_line else ""
+            rendered_lines.append(
+                f'<span{css_class}><span class="ln">{index:>5}</span> {html.escape(line)}</span>'
+            )
+        return "\n".join(rendered_lines)
 
 
 # ------------------------------------------------------------------
@@ -250,6 +333,9 @@ _HTML_TEMPLATE = """\
     box-shadow: 0 2px 8px rgba(0,0,0,0.06);
     min-width: 200px;
   }}
+  .summary-card.agent {{
+    min-width: 320px;
+  }}
   .summary-card h3 {{
     font-size: 0.85em;
     color: #7f8c8d;
@@ -258,6 +344,14 @@ _HTML_TEMPLATE = """\
     margin-bottom: 8px;
   }}
   .summary-card .big {{ font-size: 2em; font-weight: 700; color: var(--primary); }}
+  .agent-lines {{
+    font-size: 0.92em;
+    line-height: 1.6;
+    color: #425466;
+  }}
+  .agent-lines strong {{
+    color: var(--primary);
+  }}
   .summary-card table {{ width: 100%; font-size: 0.9em; }}
   .summary-card td {{ padding: 2px 8px; }}
   .summary-card td:last-child {{ text-align: right; font-weight: 600; }}
@@ -287,6 +381,63 @@ _HTML_TEMPLATE = """\
     max-width: 400px;
     word-wrap: break-word;
   }}
+  .log-actions {{
+    white-space: nowrap;
+    min-width: 180px;
+  }}
+  .log-toggle, .log-link {{
+    display: inline-block;
+    border-radius: 999px;
+    padding: 6px 10px;
+    font-size: 0.85em;
+    text-decoration: none;
+    margin-right: 8px;
+  }}
+  .log-toggle {{
+    border: 0;
+    cursor: pointer;
+    background: var(--primary);
+    color: #fff;
+  }}
+  .log-link {{
+    background: #eef4fb;
+    color: var(--primary);
+  }}
+  .muted {{
+    color: #95a5a6;
+  }}
+  .log-detail-row {{
+    background: #fbfcfe;
+  }}
+  .log-detail-meta {{
+    font-family: ui-monospace, SFMono-Regular, Menlo, monospace;
+    color: #51606f;
+    margin-bottom: 10px;
+  }}
+  .log-detail {{
+    margin: 0;
+    background: #0f1720;
+    color: #e6edf3;
+    padding: 14px;
+    border-radius: 8px;
+    overflow-x: auto;
+    font-family: ui-monospace, SFMono-Regular, Menlo, monospace;
+    line-height: 1.5;
+  }}
+  .log-detail code {{
+    display: block;
+  }}
+  .log-detail code > span {{
+    display: block;
+    white-space: pre;
+  }}
+  .log-detail .ln {{
+    color: #7c8a99;
+    margin-right: 12px;
+  }}
+  .log-detail .hit {{
+    background: rgba(41, 194, 166, 0.18);
+  }}
   table.report tr.alt {{ background: var(--primary-light); }}
   table.report tr:hover {{ background: #eaf2f8; }}
   footer {{
@@ -296,6 +447,24 @@ _HTML_TEMPLATE = """\
     font-size: 0.8em;
   }}
 </style>
+<script>
+  document.addEventListener("DOMContentLoaded", () => {{
+    document.querySelectorAll(".log-toggle").forEach((button) => {{
+      button.addEventListener("click", () => {{
+        const target = document.getElementById(button.dataset.target);
+        if (!target) return;
+        const hidden = target.hasAttribute("hidden");
+        if (hidden) {{
+          target.removeAttribute("hidden");
+          button.textContent = "Hide Source";
+        }} else {{
+          target.setAttribute("hidden", "");
+          button.textContent = "View Source";
+        }}
+      }});
+    }});
+  }});
+</script>
 </head>
 <body>
   <h1>{title}</h1>
@@ -304,7 +473,23 @@ _HTML_TEMPLATE = """\
   <div class="summary">
     <div class="summary-card">
       <h3>Total Models</h3>
-      <div class="big">{total}</div>
+      <div class="big">{total_models}</div>
+    </div>
+    <div class="summary-card">
+      <h3>Passed Models</h3>
+      <div class="big" style="color: var(--success);">{passed_models}</div>
+    </div>
+    <div class="summary-card">
+      <h3>Failed Models</h3>
+      <div class="big" style="color: var(--danger);">{failed_models}</div>
+    </div>
+    <div class="summary-card agent">
+      <h3>Agent Assist</h3>
+      <div class="agent-lines">
+        <div><strong>Classifier</strong>: {classifier_model}</div>
+        <div><strong>Debugger</strong>: {debugger_model}</div>
+        <div><strong>AI-assisted fields</strong>: {assisted_fields}</div>
+      </div>
     </div>
     <div class="summary-card">
       <h3>Errors by Category</h3>

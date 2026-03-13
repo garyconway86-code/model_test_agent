@@ -89,6 +89,7 @@ class LogExtractor:
                 model_name=model_name,
                 line_number=idx + 1,
                 message=line.strip(),
+                log_path=str(path.resolve()),
                 raw_context=context,
                 category=category,
                 matched_keyword=keyword,
@@ -100,8 +101,9 @@ class LogExtractor:
         """Recursively scan *log_dir* for log files and extract errors."""
         self._ensure_loaded()
         results: list[ErrorEntry] = []
-        for path in sorted(Path(log_dir).rglob(f"*{suffix}")):
-            model_name = path.stem
+        root = Path(log_dir)
+        for path in sorted(root.rglob(f"*{suffix}")):
+            model_name = self._infer_model_name(path, root)
             results.extend(self.extract_from_file(path, model_name=model_name))
         return results
 
@@ -136,3 +138,13 @@ class LogExtractor:
         prefix = r"(?<!\w)" if keyword[:1].isalnum() else ""
         suffix = r"(?!\w)" if keyword[-1:].isalnum() else ""
         return re.search(f"{prefix}{escaped}{suffix}", line, re.IGNORECASE) is not None
+
+    @staticmethod
+    def _infer_model_name(path: Path, root: Path) -> str:
+        try:
+            rel = path.relative_to(root)
+        except ValueError:
+            return path.stem
+        if len(rel.parts) > 1:
+            return rel.parts[0]
+        return path.stem

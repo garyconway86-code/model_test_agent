@@ -1,10 +1,12 @@
 """Tests for graph construction (no LLM calls — structure only)."""
 
+from pathlib import Path
+
 from model_test_agent.graphs.classification_subgraph import build_classification_subgraph
 from model_test_agent.graphs.debug_subgraph import build_debug_subgraph
-from model_test_agent.graphs.main_graph import _report, build_main_graph
+from model_test_agent.graphs.main_graph import _extract, _report, build_main_graph
 from model_test_agent.graphs.snr_subgraph import build_snr_subgraph
-from model_test_agent.state import DebugResult, ErrorEntry, FixStatus
+from model_test_agent.state import DebugResult, ErrorEntry, FixStatus, ModelInfo
 
 
 class TestGraphConstruction:
@@ -160,6 +162,9 @@ class TestGraphConstruction:
         }
 
     def test_report_node_returns_html_path(self, monkeypatch, tmp_path) -> None:
+        package_info = tmp_path / "package_info.json"
+        package_info.write_text('{"package_name": "demo-kit", "version": "1.2.3"}', encoding="utf-8")
+
         class DummyGenerator:
             def __init__(self, output_dir="."):
                 self.output_dir = output_dir
@@ -167,17 +172,65 @@ class TestGraphConstruction:
             def generate_xlsx(self, rows):
                 return tmp_path / "report.xlsx"
 
-            def generate_html(self, rows):
+            def generate_html(self, rows, summary=None, agent_info=None):
+                self.summary = summary
+                self.agent_info = agent_info
+                self.rows = rows
                 return tmp_path / "report.html"
 
         monkeypatch.setattr("model_test_agent.graphs.main_graph.ReportGenerator", DummyGenerator)
 
         result = _report({
-            "errors": [ErrorEntry(model_name="m1", line_number=1, message="shape mismatch", category="shape_mismatch")],
-            "models": [],
+            "errors": [
+                ErrorEntry(
+                    model_name="m1",
+                    line_number=1,
+                    message="shape mismatch",
+                    log_path="/tmp/m1.log",
+                    category="shape_mismatch",
+                )
+            ],
+            "models": [
+                ModelInfo(
+                    name="m1",
+                    config_path=str(tmp_path / "model.yaml"),
+                    package_info_path=str(package_info),
+                ),
+                ModelInfo(
+                    name="m2",
+                    config_path=str(tmp_path / "m2.yaml"),
+                ),
+            ],
             "debug_results": [],
         })
 
         assert result["report_path"].endswith("report.xlsx")
         assert result["report_html_path"].endswith("report.html")
         assert "report_rows" in result
+        assert result["report_rows"][0].log_path == "/tmp/m1.log"
+        assert any(row.model_name == "m2" and row.error_category == "no_error" for row in result["report_rows"])
+
+    def test_extract_uses_configured_log_paths_before_directory_scan(self, monkeypatch, tmp_path) -> None:
+        explicit_log = tmp_path / "Models_35" / "01-1_yolo" / "run_001" / "convert.log"
+        explicit_log.parent.mkdir(parents=True)
+        explicit_log.write_text("[ERROR] unsupported dtype\n", encoding="utf-8")
+
+        monkeypatch.setattr(
+            "model_test_agent.graphs.main_graph.ConfigReader.read_file",
+            lambda self, path: [
+                ModelInfo(
+                    name="01-1_yolo",
+                    log_path=str(explicit_log),
+                    config_path=str(tmp_path / "Models_35" / "01-1_yolo" / "config.yaml"),
+                )
+            ],
+        )
+        monkeypatch.setattr(
+            "model_test_agent.graphs.main_graph.LogExtractor.extract_from_directory",
+            lambda self, path: (_ for _ in ()).throw(AssertionError("directory scan should not be used")),
+        )
+
+        result = _extract({"log_dir": str(tmp_path), "config_path": str(tmp_path / "models.yaml")})
+
+        assert len(result["errors"]) == 1
+        assert result["errors"][0].model_name == "01-1_yolo"

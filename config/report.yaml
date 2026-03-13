@@ -12,6 +12,9 @@ xlsx:
     - key: model_name
       header: "Model Name"
       width: 28
+    - key: package_summary
+      header: "Package"
+      width: 28
     - key: quantization
       header: "Quantization"
       width: 14

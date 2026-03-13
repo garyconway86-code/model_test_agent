@@ -91,6 +91,20 @@ class TestCLIHelpers:
 
         assert lines == ["errors: 0", "models: 0", "top_models: -"]
 
+    def test_report_snapshot_includes_interactive_viewer_link(self, tmp_path) -> None:
+        report_html = tmp_path / "report.html"
+        lines = _step_snapshot_lines(
+            "report",
+            {
+                "report_rows": [],
+                "report_path": str(tmp_path / "report.xlsx"),
+                "report_html_path": str(report_html),
+            },
+        )
+
+        assert any(line == f"report_html: {report_html}" for line in lines)
+        assert any(line == f"viewer: {report_html.resolve().as_uri()}" for line in lines)
+
     def test_main_forwards_llm_config_to_full_pipeline(self, monkeypatch, tmp_path) -> None:
         captured = {}
 
@@ -111,3 +125,22 @@ class TestCLIHelpers:
         cli.main()
 
         assert captured["args"][3] == str(tmp_path / "llm.yaml")
+
+    def test_main_allows_config_only_run(self, monkeypatch, tmp_path) -> None:
+        captured = {}
+        monkeypatch.setattr(
+            sys,
+            "argv",
+            [
+                "model-test-agent",
+                "--skip-health-check",
+                "--config",
+                str(tmp_path / "models.yaml"),
+            ],
+        )
+        monkeypatch.setattr(cli, "_run_full_pipeline", lambda *args: captured.setdefault("args", args))
+
+        cli.main()
+
+        assert captured["args"][0] == ""
+        assert captured["args"][1] == str(tmp_path / "models.yaml")

@@ -1,0 +1,4 @@
+[INFO] loading model assets
+[INFO] using calibration cache from dataset_a
+[ERROR] Shape mismatch at Detect head: expected [1,255,80,80] but got [1,252,80,80]
+[INFO] export aborted after validation failure
