@@ -5,6 +5,7 @@ from model_test_agent.tools.config_reader import ConfigReader
 from model_test_agent.tools.report_generator import ReportGenerator
 from model_test_agent.tools.docker_executor import DockerExecutor
 from model_test_agent.tools.history_store import HistoryStore
+from model_test_agent.tools.semantic_retriever import SemanticRetriever
 
 __all__ = [
     "LogExtractor",
@@ -12,4 +13,5 @@ __all__ = [
     "ReportGenerator",
     "DockerExecutor",
     "HistoryStore",
+    "SemanticRetriever",
 ]

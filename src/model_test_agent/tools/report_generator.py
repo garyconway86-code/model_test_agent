@@ -136,7 +136,7 @@ class ReportGenerator:
 
         # Build table rows
         header_cells = "".join(f'<th>{html.escape(c["header"])}</th>' for c in columns)
-        header_cells += "<th>Log</th>"
+        header_cells += "<th>Checked By</th><th>Log</th>"
         body_rows = []
         log_cache: dict[str, str] = {}
         for i, report_row in enumerate(rows):
@@ -151,16 +151,19 @@ class ReportGenerator:
             )
             row_id = f"row-{i}"
             log_id = f"log-{i}"
+            checked_by_key = self._row_storage_key(report_row, i)
             body_rows.append(
                 f'  <tr id="{row_id}" class="{" ".join(row_classes)}"'
                 f' data-status="{html.escape(report_row.status, quote=True)}"'
                 f' data-categories="{html.escape("|".join(categories), quote=True)}"'
                 f' data-detail-target="{log_id if report_row.log_path else ""}">'
-                f'{cells}<td class="log-actions">{self._build_log_actions(report_row, log_id)}</td></tr>'
+                f"{cells}"
+                f"{self._build_checked_by_cell(report_row, checked_by_key)}"
+                f'<td class="log-actions">{self._build_log_actions(report_row, log_id)}</td></tr>'
             )
             if report_row.log_path:
                 body_rows.append(
-                    self._build_log_detail(report_row, len(columns) + 1, log_id, row_id, log_cache)
+                    self._build_log_detail(report_row, len(columns) + 2, log_id, row_id, log_cache)
                 )
         body_html = "\n".join(body_rows)
 
@@ -223,12 +226,14 @@ class ReportGenerator:
             "quantization": row.quantization,
             "has_test_data": row.has_test_data,
             "error_category": row.error_category,
+            "error_count": row.error_count,
             "key_log_snippet": row.key_log_snippet,
             "history_match": row.history_match,
             "suggested_fix": row.suggested_fix,
             "fix_executed": row.fix_executed,
             "fix_result": row.fix_result,
             "status": row.status,
+            "checked_by": row.checked_by,
         }
 
     @staticmethod
@@ -258,6 +263,23 @@ class ReportGenerator:
             "Open File</a>"
         )
 
+    @staticmethod
+    def _build_checked_by_cell(row: ReportRow, row_key: str) -> str:
+        checked_by = row.checked_by.strip()
+        checked_attr = " checked" if checked_by else ""
+        label = html.escape(checked_by) if checked_by else "-"
+        return (
+            '<td class="checked-by-cell"'
+            f' data-row-key="{html.escape(row_key, quote=True)}"'
+            f' data-initial-checked-by="{html.escape(checked_by, quote=True)}">'
+            '<label class="checked-by-toggle">'
+            f'<input type="checkbox" class="checked-by-checkbox"{checked_attr}>'
+            "<span>Checked</span>"
+            "</label>"
+            f'<div class="checked-by-name">{label}</div>'
+            "</td>"
+        )
+
     @classmethod
     def _build_log_detail(
         cls,
@@ -280,6 +302,16 @@ class ReportGenerator:
     @staticmethod
     def _row_categories(row: ReportRow) -> list[str]:
         return [part.strip() for part in row.error_category.split(",") if part.strip()]
+
+    @staticmethod
+    def _row_storage_key(row: ReportRow, index: int) -> str:
+        return "|".join([
+            str(index),
+            row.model_name,
+            row.log_path,
+            str(row.log_line),
+            row.error_category,
+        ])
 
     @staticmethod
     def _read_log_source(log_path: str, log_cache: dict[str, str]) -> str:
@@ -434,6 +466,29 @@ _HTML_TEMPLATE = """\
     max-width: 400px;
     word-wrap: break-word;
   }}
+  .checked-by-cell {{
+    min-width: 170px;
+    white-space: nowrap;
+  }}
+  .checked-by-toggle {{
+    display: inline-flex;
+    align-items: center;
+    gap: 8px;
+    font-weight: 600;
+    color: var(--primary);
+    cursor: pointer;
+  }}
+  .checked-by-checkbox {{
+    width: 16px;
+    height: 16px;
+    accent-color: var(--primary);
+    cursor: pointer;
+  }}
+  .checked-by-name {{
+    margin-top: 6px;
+    color: #51606f;
+    font-size: 0.92em;
+  }}
   .log-actions {{
     white-space: nowrap;
     min-width: 180px;
@@ -510,8 +565,54 @@ _HTML_TEMPLATE = """\
     }};
     const reportRows = Array.from(document.querySelectorAll("tr.report-row"));
     const detailRows = Array.from(document.querySelectorAll(".log-detail-row"));
+    const checkedByCells = Array.from(document.querySelectorAll(".checked-by-cell"));
     const filterState = document.getElementById("filter-state");
     const clearButton = document.getElementById("clear-filters");
+    const usernameStorageKey = "model-test-agent:checked-by-user";
+    const reportStorageKey = `model-test-agent:report-checks:${{window.location.pathname}}`;
+    const checkedByState = loadCheckedByState();
+
+    function loadCheckedByState() {{
+      try {{
+        const raw = window.localStorage.getItem(reportStorageKey);
+        const parsed = raw ? JSON.parse(raw) : {{}};
+        return parsed && typeof parsed === "object" ? parsed : {{}};
+      }} catch (_error) {{
+        return {{}};
+      }}
+    }}
+
+    function saveCheckedByState() {{
+      window.localStorage.setItem(reportStorageKey, JSON.stringify(checkedByState));
+    }}
+
+    function getStoredUsername() {{
+      return (window.localStorage.getItem(usernameStorageKey) || "").trim();
+    }}
+
+    function ensureUsername() {{
+      let username = getStoredUsername();
+      if (username) {{
+        return username;
+      }}
+      username = (window.prompt("Enter your username for Checked By") || "").trim();
+      if (username) {{
+        window.localStorage.setItem(usernameStorageKey, username);
+      }}
+      return username;
+    }}
+
+    function renderCheckedByCell(cell, checkedBy) {{
+      const checkbox = cell.querySelector(".checked-by-checkbox");
+      const name = cell.querySelector(".checked-by-name");
+      const value = (checkedBy || "").trim();
+      if (checkbox) {{
+        checkbox.checked = Boolean(value);
+      }}
+      if (name) {{
+        name.textContent = value || "-";
+      }}
+    }}
 
     function resetDetail(row) {{
       const detailId = row.dataset.detailTarget;
@@ -575,6 +676,38 @@ _HTML_TEMPLATE = """\
       }}
       syncActiveStates();
     }}
+
+    checkedByCells.forEach((cell) => {{
+      const rowKey = cell.dataset.rowKey;
+      const checkbox = cell.querySelector(".checked-by-checkbox");
+      const initialCheckedBy = (cell.dataset.initialCheckedBy || "").trim();
+      const savedCheckedBy = typeof checkedByState[rowKey] === "string" ? checkedByState[rowKey].trim() : "";
+      const resolvedCheckedBy = savedCheckedBy || initialCheckedBy;
+      if (resolvedCheckedBy) {{
+        checkedByState[rowKey] = resolvedCheckedBy;
+      }}
+      renderCheckedByCell(cell, resolvedCheckedBy);
+      if (!checkbox || !rowKey) {{
+        return;
+      }}
+      checkbox.addEventListener("change", () => {{
+        if (!checkbox.checked) {{
+          delete checkedByState[rowKey];
+          renderCheckedByCell(cell, "");
+          saveCheckedByState();
+          return;
+        }}
+        const username = ensureUsername();
+        if (!username) {{
+          checkbox.checked = false;
+          return;
+        }}
+        checkedByState[rowKey] = username;
+        renderCheckedByCell(cell, username);
+        saveCheckedByState();
+      }});
+    }});
+    saveCheckedByState();
 
     document.querySelectorAll(".filter-card, .filter-option").forEach((node) => {{
       node.addEventListener("click", () => {{

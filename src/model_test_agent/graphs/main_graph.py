@@ -124,12 +124,14 @@ def _report(state: AgentState) -> dict[str, Any]:
                 quantization=m.quantization if m else "",
                 has_test_data="是" if (m and m.has_test_data) else "否",
                 error_category="no_error",
+                error_count=0,
                 key_log_snippet="No error detected",
                 history_match="否",
                 suggested_fix="",
                 fix_executed="否",
                 fix_result="success",
                 status="success",
+                checked_by="",
             ))
             continue
 
@@ -145,12 +147,14 @@ def _report(state: AgentState) -> dict[str, Any]:
             quantization=m.quantization if m else "",
             has_test_data="是" if (m and m.has_test_data) else "否",
             error_category=", ".join(categories) or "unknown",
+            error_count=len(errs),
             key_log_snippet=_summarize_error_messages(errs),
             history_match="是" if any(dr.history_match_id for dr in results) else "否",
             suggested_fix=_summarize_suggested_fixes(results),
             fix_executed="是" if any(dr.fix_command for dr in results) else "否",
             fix_result=_summarize_fix_results(results),
             status=_aggregate_status(results),
+            checked_by="",
         ))
 
     passed_models = sum(1 for row in rows if row.status == "success")
