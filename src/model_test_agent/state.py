@@ -76,7 +76,6 @@ class ReportRow:
     quantization: str = ""
     has_test_data: str = ""
     error_category: str = ""
-    error_count: int = 0
     key_log_snippet: str = ""
     history_match: str = ""
     suggested_fix: str = ""

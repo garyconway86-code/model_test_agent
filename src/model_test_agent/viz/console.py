@@ -137,7 +137,6 @@ class ConsoleUI:
         table.add_column("量化", max_width=10)
         table.add_column("测试数据", max_width=8)
         table.add_column("错误类型", style="yellow", max_width=18)
-        table.add_column("数量", justify="right", max_width=6)
         table.add_column("日志摘要", max_width=40)
         table.add_column("历史", max_width=6)
         table.add_column("修复建议", max_width=40)
@@ -158,7 +157,6 @@ class ConsoleUI:
                 row.quantization,
                 row.has_test_data,
                 row.error_category,
-                str(row.error_count),
                 row.key_log_snippet[:40],
                 row.history_match,
                 row.suggested_fix[:40],

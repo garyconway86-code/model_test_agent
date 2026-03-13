@@ -112,54 +112,52 @@ def _report(state: AgentState) -> dict[str, Any]:
 
     # Map category → debug result
     dr_map: dict[str, DebugResult] = {dr.error_category: dr for dr in debug_results}
+    all_model_names = sorted(known_models | error_models)
 
-    for model_name, errs in sorted(model_errors.items()):
+    for model_name in all_model_names:
+        errs = model_errors.get(model_name, [])
         m = models_map.get(model_name)
-        # Group this model's errors by category
-        cats: dict[str, list[ErrorEntry]] = {}
-        for e in errs:
-            cats.setdefault(e.category, []).append(e)
-
-        for cat, cat_errs in cats.items():
-            dr = dr_map.get(cat)
+        if not errs:
             rows.append(ReportRow(
                 model_name=model_name,
-                log_path=cat_errs[0].log_path if cat_errs else "",
-                log_line=cat_errs[0].line_number if cat_errs else 0,
                 package_summary=_load_package_summary(m),
                 quantization=m.quantization if m else "",
                 has_test_data="是" if (m and m.has_test_data) else "否",
-                error_category=cat,
-                error_count=len(cat_errs),
-                key_log_snippet=cat_errs[0].message[:120] if cat_errs else "",
-                history_match="是" if (dr and dr.history_match_id) else "否",
-                suggested_fix=dr.suggested_fix[:200] if dr else "",
-                fix_executed="是" if (dr and dr.fix_command) else "否",
-                fix_result=dr.fix_status.value if dr else "",
-                status=dr.fix_status.value if dr else "pending",
+                error_category="no_error",
+                key_log_snippet="No error detected",
+                history_match="否",
+                suggested_fix="",
+                fix_executed="否",
+                fix_result="success",
+                status="success",
             ))
+            continue
 
-    for model_name in sorted(known_models - error_models):
-        m = models_map.get(model_name)
+        categories = list(dict.fromkeys(err.category for err in errs if err.category))
+        results = [dr_map[category] for category in categories if category in dr_map]
+        lead_error = min(errs, key=lambda err: (err.line_number or 0, err.log_path))
+
         rows.append(ReportRow(
             model_name=model_name,
+            log_path=lead_error.log_path,
+            log_line=lead_error.line_number,
             package_summary=_load_package_summary(m),
             quantization=m.quantization if m else "",
             has_test_data="是" if (m and m.has_test_data) else "否",
-            error_category="no_error",
-            error_count=0,
-            key_log_snippet="No error detected",
-            history_match="否",
-            suggested_fix="",
-            fix_executed="否",
-            fix_result="success",
-            status="success",
+            error_category=", ".join(categories) or "unknown",
+            key_log_snippet=_summarize_error_messages(errs),
+            history_match="是" if any(dr.history_match_id for dr in results) else "否",
+            suggested_fix=_summarize_suggested_fixes(results),
+            fix_executed="是" if any(dr.fix_command for dr in results) else "否",
+            fix_result=_summarize_fix_results(results),
+            status=_aggregate_status(results),
         ))
 
+    passed_models = sum(1 for row in rows if row.status == "success")
     summary = {
-        "total_models": len(known_models),
-        "passed_models": len(known_models - error_models),
-        "failed_models": len(error_models),
+        "total_models": len(rows),
+        "passed_models": passed_models,
+        "failed_models": len(rows) - passed_models,
     }
     agent_info = _build_agent_info(state.get("llm_config_path", ""))
 
@@ -172,6 +170,57 @@ def _report(state: AgentState) -> dict[str, Any]:
         "report_path": str(xlsx_path),
         "report_html_path": str(html_path),
     }
+
+
+def _aggregate_status(results: list[DebugResult]) -> str:
+    if not results:
+        return "pending"
+    priorities = {
+        FixStatus.FAILED.value: 0,
+        FixStatus.RUNNING.value: 1,
+        FixStatus.PENDING.value: 2,
+        FixStatus.SKIPPED.value: 3,
+        FixStatus.SUCCESS.value: 4,
+    }
+    return min((result.fix_status.value for result in results), key=lambda status: priorities.get(status, 99))
+
+
+def _summarize_error_messages(errors: list[ErrorEntry], limit: int = 2) -> str:
+    snippets: list[str] = []
+    for error in errors:
+        message = error.message.strip()
+        if message and message not in snippets:
+            snippets.append(message[:120])
+        if len(snippets) >= limit:
+            break
+    return " | ".join(snippets)
+
+
+def _summarize_suggested_fixes(results: list[DebugResult], limit: int = 3) -> str:
+    suggestions: list[str] = []
+    for result in results:
+        suggestion = result.suggested_fix.strip()
+        if not suggestion:
+            continue
+        label = f"{result.error_category}: {suggestion[:120]}"
+        if label not in suggestions:
+            suggestions.append(label)
+        if len(suggestions) >= limit:
+            break
+    return " | ".join(suggestions)
+
+
+def _summarize_fix_results(results: list[DebugResult], limit: int = 3) -> str:
+    if not results:
+        return ""
+    statuses: list[str] = []
+    for result in results:
+        label = f"{result.error_category}:{result.fix_status.value}"
+        if label not in statuses:
+            statuses.append(label)
+        if len(statuses) >= limit:
+            break
+    return ", ".join(statuses)
 
 
 def _expand_paths(path_pattern: str) -> list[Path]:

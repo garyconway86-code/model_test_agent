@@ -141,17 +141,27 @@ class ReportGenerator:
         log_cache: dict[str, str] = {}
         for i, report_row in enumerate(rows):
             rd = self._row_to_dict(report_row)
-            cls = ' class="alt"' if i % 2 == 1 else ""
+            categories = self._row_categories(report_row)
+            row_classes = ["report-row"]
+            if i % 2 == 1:
+                row_classes.append("alt")
             cells = "".join(
                 f"<td>{html.escape(str(rd.get(c['key'], '')))}</td>"
                 for c in columns
             )
+            row_id = f"row-{i}"
             log_id = f"log-{i}"
             body_rows.append(
-                f'  <tr{cls}>{cells}<td class="log-actions">{self._build_log_actions(report_row, log_id)}</td></tr>'
+                f'  <tr id="{row_id}" class="{" ".join(row_classes)}"'
+                f' data-status="{html.escape(report_row.status, quote=True)}"'
+                f' data-categories="{html.escape("|".join(categories), quote=True)}"'
+                f' data-detail-target="{log_id if report_row.log_path else ""}">'
+                f'{cells}<td class="log-actions">{self._build_log_actions(report_row, log_id)}</td></tr>'
             )
             if report_row.log_path:
-                body_rows.append(self._build_log_detail(report_row, len(columns) + 1, log_id, log_cache))
+                body_rows.append(
+                    self._build_log_detail(report_row, len(columns) + 1, log_id, row_id, log_cache)
+                )
         body_html = "\n".join(body_rows)
 
         # Statistics for the summary section
@@ -167,10 +177,16 @@ class ReportGenerator:
             by_status[r.status] = by_status.get(r.status, 0) + 1
 
         stats_rows = "".join(
-            f"<tr><td>{cat}</td><td>{cnt}</td></tr>" for cat, cnt in sorted(by_category.items())
+            "<tr class=\"filter-option\""
+            f' data-filter-kind="category" data-filter-value="{html.escape(cat, quote=True)}">'
+            f"<td>{html.escape(cat)}</td><td>{cnt}</td></tr>"
+            for cat, cnt in sorted(by_category.items())
         )
         status_rows = "".join(
-            f"<tr><td>{st}</td><td>{cnt}</td></tr>" for st, cnt in sorted(by_status.items())
+            "<tr class=\"filter-option\""
+            f' data-filter-kind="status" data-filter-value="{html.escape(st, quote=True)}">'
+            f"<td>{html.escape(st)}</td><td>{cnt}</td></tr>"
+            for st, cnt in sorted(by_status.items())
         )
 
         html_output = _HTML_TEMPLATE.format(
@@ -186,6 +202,7 @@ class ReportGenerator:
             debugger_model=html.escape(agent_info.get("debugger_model", "-")),
             assisted_fields=html.escape(agent_info.get("assisted_fields", "")),
             timestamp=datetime.now().strftime("%Y-%m-%d %H:%M:%S"),
+            visible_rows=len(rows),
         )
 
         out_path = self.output_dir / filename
@@ -206,7 +223,6 @@ class ReportGenerator:
             "quantization": row.quantization,
             "has_test_data": row.has_test_data,
             "error_category": row.error_category,
-            "error_count": row.error_count,
             "key_log_snippet": row.key_log_snippet,
             "history_match": row.history_match,
             "suggested_fix": row.suggested_fix,
@@ -223,7 +239,6 @@ class ReportGenerator:
             {"key": "quantization", "header": "Quantization", "width": 14},
             {"key": "has_test_data", "header": "Has Test Data", "width": 13},
             {"key": "error_category", "header": "Error Category", "width": 18},
-            {"key": "error_count", "header": "Error Count", "width": 12},
             {"key": "key_log_snippet", "header": "Key Log (truncated)", "width": 50},
             {"key": "history_match", "header": "Seen Before", "width": 12},
             {"key": "suggested_fix", "header": "Suggested Fix", "width": 55},
@@ -249,17 +264,22 @@ class ReportGenerator:
         row: ReportRow,
         colspan: int,
         log_id: str,
+        parent_row_id: str,
         log_cache: dict[str, str],
     ) -> str:
         source = cls._read_log_source(row.log_path, log_cache)
         line_label = f"line {row.log_line}" if row.log_line else "unknown line"
         return (
-            f'  <tr id="{log_id}" class="log-detail-row" hidden>'
+            f'  <tr id="{log_id}" class="log-detail-row" data-parent-row="{parent_row_id}" hidden>'
             f'<td colspan="{colspan}">'
             f'<div class="log-detail-meta">{html.escape(row.log_path)} ({line_label})</div>'
             f'<pre class="log-detail"><code>{cls._format_log_source(source, row.log_line)}</code></pre>'
             "</td></tr>"
         )
+
+    @staticmethod
+    def _row_categories(row: ReportRow) -> list[str]:
+        return [part.strip() for part in row.error_category.split(",") if part.strip()]
 
     @staticmethod
     def _read_log_source(log_path: str, log_cache: dict[str, str]) -> str:
@@ -333,6 +353,18 @@ _HTML_TEMPLATE = """\
     box-shadow: 0 2px 8px rgba(0,0,0,0.06);
     min-width: 200px;
   }}
+  .summary-card.filter-card,
+  .filter-option {{
+    cursor: pointer;
+    transition: transform 0.15s ease, box-shadow 0.15s ease, background 0.15s ease;
+  }}
+  .summary-card.filter-card:hover,
+  .filter-option:hover {{
+    transform: translateY(-1px);
+  }}
+  .summary-card.filter-card.active {{
+    box-shadow: 0 0 0 2px rgba(31, 78, 121, 0.18), 0 8px 20px rgba(31, 78, 121, 0.12);
+  }}
   .summary-card.agent {{
     min-width: 320px;
   }}
@@ -355,6 +387,27 @@ _HTML_TEMPLATE = """\
   .summary-card table {{ width: 100%; font-size: 0.9em; }}
   .summary-card td {{ padding: 2px 8px; }}
   .summary-card td:last-child {{ text-align: right; font-weight: 600; }}
+  .filter-option.active {{
+    background: rgba(31, 78, 121, 0.08);
+  }}
+  .toolbar {{
+    display: flex;
+    align-items: center;
+    justify-content: space-between;
+    gap: 12px;
+    margin-bottom: 12px;
+    color: #51606f;
+    font-size: 0.92em;
+  }}
+  .toolbar button {{
+    border: 0;
+    border-radius: 999px;
+    padding: 8px 12px;
+    background: #e8f0f8;
+    color: var(--primary);
+    cursor: pointer;
+    font-weight: 600;
+  }}
   .table-wrapper {{
     overflow-x: auto;
     background: #fff;
@@ -440,6 +493,7 @@ _HTML_TEMPLATE = """\
   }}
   table.report tr.alt {{ background: var(--primary-light); }}
   table.report tr:hover {{ background: #eaf2f8; }}
+  tr[hidden] {{ display: none !important; }}
   footer {{
     margin-top: 24px;
     text-align: center;
@@ -449,10 +503,110 @@ _HTML_TEMPLATE = """\
 </style>
 <script>
   document.addEventListener("DOMContentLoaded", () => {{
+    const filters = {{
+      group: "all",
+      category: "all",
+      status: "all",
+    }};
+    const reportRows = Array.from(document.querySelectorAll("tr.report-row"));
+    const detailRows = Array.from(document.querySelectorAll(".log-detail-row"));
+    const filterState = document.getElementById("filter-state");
+    const clearButton = document.getElementById("clear-filters");
+
+    function resetDetail(row) {{
+      const detailId = row.dataset.detailTarget;
+      if (!detailId) return;
+      const detail = document.getElementById(detailId);
+      if (detail) {{
+        detail.hidden = true;
+      }}
+      const toggle = row.querySelector(".log-toggle");
+      if (toggle) {{
+        toggle.textContent = "View Source";
+      }}
+    }}
+
+    function matches(row) {{
+      const status = row.dataset.status || "";
+      const categories = (row.dataset.categories || "").split("|").filter(Boolean);
+      if (filters.group === "success" && status !== "success") {{
+        return false;
+      }}
+      if (filters.group === "failed" && status === "success") {{
+        return false;
+      }}
+      if (filters.category !== "all" && !categories.includes(filters.category)) {{
+        return false;
+      }}
+      if (filters.status !== "all" && status !== filters.status) {{
+        return false;
+      }}
+      return true;
+    }}
+
+    function syncActiveStates() {{
+      document.querySelectorAll(".filter-card, .filter-option").forEach((node) => {{
+        const kind = node.dataset.filterKind;
+        const value = node.dataset.filterValue;
+        if (!kind || !value) return;
+        node.classList.toggle("active", filters[kind] === value);
+      }});
+    }}
+
+    function applyFilters() {{
+      let visible = 0;
+      reportRows.forEach((row) => {{
+        const show = matches(row);
+        row.hidden = !show;
+        if (!show) {{
+          resetDetail(row);
+        }} else {{
+          visible += 1;
+        }}
+      }});
+      detailRows.forEach((row) => {{
+        const parent = document.getElementById(row.dataset.parentRow);
+        if (!parent || parent.hidden) {{
+          row.hidden = true;
+        }}
+      }});
+      if (filterState) {{
+        filterState.textContent = `Showing ${{visible}} of {visible_rows} rows`;
+      }}
+      syncActiveStates();
+    }}
+
+    document.querySelectorAll(".filter-card, .filter-option").forEach((node) => {{
+      node.addEventListener("click", () => {{
+        const kind = node.dataset.filterKind;
+        const value = node.dataset.filterValue;
+        if (!kind || !value) return;
+        if (kind === "group" && value === "all") {{
+          filters.group = "all";
+          filters.category = "all";
+          filters.status = "all";
+        }} else {{
+          filters[kind] = filters[kind] === value ? "all" : value;
+        }}
+        applyFilters();
+      }});
+    }});
+
+    if (clearButton) {{
+      clearButton.addEventListener("click", () => {{
+        filters.group = "all";
+        filters.category = "all";
+        filters.status = "all";
+        applyFilters();
+      }});
+    }}
+
     document.querySelectorAll(".log-toggle").forEach((button) => {{
       button.addEventListener("click", () => {{
         const target = document.getElementById(button.dataset.target);
         if (!target) return;
+        const parent = button.closest("tr.report-row");
+        if (parent && parent.hidden) return;
         const hidden = target.hasAttribute("hidden");
         if (hidden) {{
           target.removeAttribute("hidden");
@@ -463,6 +617,8 @@ _HTML_TEMPLATE = """\
         }}
       }});
     }});
+
+    applyFilters();
   }});
 </script>
 </head>
@@ -471,15 +627,15 @@ _HTML_TEMPLATE = """\
   <div class="meta">Generated: {timestamp}</div>
 
   <div class="summary">
-    <div class="summary-card">
+    <div class="summary-card filter-card active" data-filter-kind="group" data-filter-value="all">
       <h3>Total Models</h3>
       <div class="big">{total_models}</div>
     </div>
-    <div class="summary-card">
+    <div class="summary-card filter-card" data-filter-kind="group" data-filter-value="success">
       <h3>Passed Models</h3>
       <div class="big" style="color: var(--success);">{passed_models}</div>
     </div>
-    <div class="summary-card">
+    <div class="summary-card filter-card" data-filter-kind="group" data-filter-value="failed">
       <h3>Failed Models</h3>
       <div class="big" style="color: var(--danger);">{failed_models}</div>
     </div>
@@ -499,6 +655,11 @@ _HTML_TEMPLATE = """\
       <h3>Status</h3>
       <table>{status_rows}</table>
     </div>
+  </div>
+
+  <div class="toolbar">
+    <div id="filter-state">Showing {visible_rows} of {visible_rows} rows</div>
+    <button type="button" id="clear-filters">Clear Filters</button>
   </div>
 
   <div class="table-wrapper">

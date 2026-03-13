@@ -18,7 +18,7 @@ from langgraph.graph import END, StateGraph
 from model_test_agent.skills.debug_analyzer import DebugAnalyzerSkill
 from model_test_agent.state import DebugResult, DebugState, FixStatus
 from model_test_agent.tools.docker_executor import DockerExecutor
-from model_test_agent.tools.semantic_retriever import SemanticRetriever
+from model_test_agent.tools.history_store import HistoryStore
 
 
 def _analyze(state: DebugState) -> dict[str, Any]:
@@ -40,11 +40,11 @@ def _analyze(state: DebugState) -> dict[str, Any]:
         return {"debug_results": list(existing_results.values())}
 
     skill = DebugAnalyzerSkill(llm_config_path=llm_config_path)
-    retriever = SemanticRetriever(config_path=llm_config_path)
+    history_store = HistoryStore()
 
     # Retrieve relevant history per category before calling the LLM.
     history_per_category = {
-        category: retriever.find_similar(
+        category: history_store.find_similar(
             category,
             key_log=errors[0].message if errors else "",
             top_k=3,

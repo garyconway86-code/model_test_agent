@@ -30,6 +30,7 @@ def _parse_args() -> argparse.Namespace:
         description="模型转换测试分析 Agent — 自动化错误分析与修复建议",
     )
     parser.add_argument("--target-dir", type=str, help="目标目录路径（目录下每个子目录是一个测试模型）")
+    parser.add_argument("--log-dir", type=str, help="日志目录路径（可替代 --target-dir）")
     parser.add_argument("--output", type=str, default="./output", help="输出目录（默认: ./output）")
     parser.add_argument(
         "--mode",
@@ -149,10 +150,10 @@ def _format_error_sample(err) -> str:
 
 def _step_snapshot_lines(step_key: str, state: dict) -> list[str]:
     if step_key == "extract" and "errors" not in state and "models" not in state:
-        target_dir = Path(state.get("target_dir", ""))
-        model_dirs = [p.name for p in sorted(path for path in target_dir.iterdir() if path.is_dir())[:4]] if target_dir.is_dir() else []
+        source_dir = Path(state.get("target_dir") or state.get("log_dir", ""))
+        model_dirs = [p.name for p in sorted(path for path in source_dir.iterdir() if path.is_dir())[:4]] if source_dir.is_dir() else []
         lines = [
-            f"target_dir: {target_dir or '-'}",
+            f"input_dir: {source_dir or '-'}",
         ]
         if model_dirs:
             lines.append(f"model_dirs: {', '.join(model_dirs)}")
@@ -236,6 +237,7 @@ def _run_full_pipeline(
     llm_config_path: str,
     max_retries: int,
     auto_fix: bool,
+    log_dir: str = "",
 ) -> None:
     """Execute the complete LangGraph pipeline with live progress."""
     progress = ui.create_progress()
@@ -250,6 +252,7 @@ def _run_full_pipeline(
 
         initial_state = {
             "target_dir": target_dir,
+            "log_dir": log_dir,
             "output_dir": output_dir,
             "llm_config_path": llm_config_path,
             "auto_fix": auto_fix,
@@ -322,14 +325,14 @@ def _run_full_pipeline(
         ui.show_completion(report_path, report_html_path)
 
 
-def _run_classify_only(target_dir: str, output_dir: str, llm_config_path: str) -> None:
+def _run_classify_only(target_dir: str, output_dir: str, llm_config_path: str, log_dir: str = "") -> None:
     """Run only the classification subgraph."""
     from model_test_agent.graphs.classification_subgraph import build_classification_subgraph
     from model_test_agent.graphs.main_graph import _extract
 
     console.print(f"\n[bold blue]{t('step_extract')}...[/bold blue]")
-    _show_step_snapshot("extract", {"target_dir": target_dir})
-    extracted = _extract({"target_dir": target_dir})
+    _show_step_snapshot("extract", {"target_dir": target_dir, "log_dir": log_dir})
+    extracted = _extract({"target_dir": target_dir, "log_dir": log_dir})
     errors = extracted.get("errors", [])
     models = extracted.get("models", [])
     _show_step_snapshot("extract", extracted)
@@ -357,6 +360,7 @@ def _run_debug_only(
     llm_config_path: str,
     max_retries: int,
     auto_fix: bool,
+    log_dir: str = "",
 ) -> None:
     """Run classification + debug subgraph (skip reporting)."""
     from model_test_agent.graphs.classification_subgraph import build_classification_subgraph
@@ -364,8 +368,8 @@ def _run_debug_only(
     from model_test_agent.graphs.main_graph import _extract
 
     console.print(f"\n[bold blue]{t('step_extract')}...[/bold blue]")
-    _show_step_snapshot("extract", {"target_dir": target_dir})
-    extracted = _extract({"target_dir": target_dir})
+    _show_step_snapshot("extract", {"target_dir": target_dir, "log_dir": log_dir})
+    extracted = _extract({"target_dir": target_dir, "log_dir": log_dir})
     errors = extracted.get("errors", [])
     models = extracted.get("models", [])
     _show_step_snapshot("extract", extracted)
@@ -484,35 +488,40 @@ def main() -> None:
         return
 
     # If no target-dir is provided, enter interactive mode
-    if not args.target_dir:
+    if not args.target_dir and not args.log_dir:
         settings = _interactive_setup()
     else:
         settings = {
-            "target_dir": args.target_dir,
+            "target_dir": args.target_dir or "",
+            "log_dir": args.log_dir or "",
             "output_dir": args.output,
             "llm_config_path": args.llm_config or "",
             "mode": args.mode,
             "auto_fix": args.auto_fix,
         }
 
-    target_dir = settings["target_dir"]
+    target_dir = settings.get("target_dir", "")
+    log_dir = settings.get("log_dir", "")
     output_dir = settings["output_dir"]
     llm_config_path = settings.get("llm_config_path", "")
     mode = settings["mode"]
 
-    # Validate target directory
-    if not Path(target_dir).is_dir():
-        console.print(f"[bold red]{t('error_no_target')}: {target_dir}[/bold red]")
+    input_dir = target_dir or log_dir
+    if not input_dir or not Path(input_dir).is_dir():
+        console.print(f"[bold red]{t('error_no_target')}: {input_dir or '-'}[/bold red]")
+        sys.exit(1)
+    if mode == "snr" and not target_dir:
+        console.print("[bold red]SNR 模式需要 --target-dir[/bold red]")
         sys.exit(1)
 
     Path(output_dir).mkdir(parents=True, exist_ok=True)
 
     if mode == "full":
-        _run_full_pipeline(target_dir, output_dir, llm_config_path, args.max_retries, settings["auto_fix"])
+        _run_full_pipeline(target_dir, output_dir, llm_config_path, args.max_retries, settings["auto_fix"], log_dir)
     elif mode == "classify":
-        _run_classify_only(target_dir, output_dir, llm_config_path)
+        _run_classify_only(target_dir, output_dir, llm_config_path, log_dir)
     elif mode == "debug":
-        _run_debug_only(target_dir, output_dir, llm_config_path, args.max_retries, settings["auto_fix"])
+        _run_debug_only(target_dir, output_dir, llm_config_path, args.max_retries, settings["auto_fix"], log_dir)
     elif mode == "snr":
         _run_snr_only(target_dir)
 

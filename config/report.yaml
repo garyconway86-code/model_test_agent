@@ -24,9 +24,6 @@ xlsx:
     - key: error_category
       header: "Error Category"
       width: 18
-    - key: error_count
-      header: "Error Count"
-      width: 12
     - key: key_log_snippet
       header: "Key Log (truncated)"
       width: 50

@@ -87,7 +87,7 @@ class DebugAnalyzerSkill(BaseSkill):
         category: str,
         errors: list[ErrorEntry],
         model_map: dict[str, ModelInfo],
-        history_cases: list[dict[str, Any]],  # pre-retrieved, already ranked
+        history_cases: list[dict[str, Any]],  # pre-retrieved from the history store
     ) -> DebugResult:
         affected = sorted({e.model_name for e in errors})
 
@@ -114,7 +114,7 @@ class DebugAnalyzerSkill(BaseSkill):
             )
         error_samples = "\n\n".join(sample_lines)
 
-        # Build history context (cases already retrieved and ranked by SemanticRetriever)
+        # Build history context from the pre-retrieved history cases.
         relevant_history = history_cases
         if relevant_history:
             history_lines = []

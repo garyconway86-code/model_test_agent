@@ -62,6 +62,10 @@ def _label(zh_text: str, en_text: str) -> str:
 _COLORS = ["#1F4E79", "#2E75B6", "#4BACC6", "#F79646", "#E74C3C", "#27AE60", "#8E44AD", "#95A5A6"]
 
 
+def _row_categories(row: ReportRow) -> list[str]:
+    return [part.strip() for part in row.error_category.split(",") if part.strip()]
+
+
 class ChartGenerator:
     """Generate analysis charts and save to disk.
 
@@ -179,10 +183,15 @@ class ChartGenerator:
         rows: list[ReportRow],
         filename: str = "quantization_heatmap.png",
     ) -> Path:
-        """Heatmap: error count by quantization type × error category."""
+        """Heatmap: affected model count by quantization type × error category."""
         # Build the matrix
         quant_types: list[str] = sorted({r.quantization for r in rows if r.quantization})
-        categories: list[str] = sorted({r.error_category for r in rows if r.error_category})
+        categories: list[str] = sorted({
+            category
+            for row in rows
+            for category in _row_categories(row)
+            if category
+        })
         if not quant_types or not categories:
             # Nothing to plot
             fig, ax = plt.subplots(figsize=(4, 3))
@@ -198,8 +207,8 @@ class ChartGenerator:
             row_data = []
             for cat in categories:
                 count = sum(
-                    r.error_count for r in rows
-                    if r.quantization == qt and r.error_category == cat
+                    1 for r in rows
+                    if r.quantization == qt and cat in _row_categories(r)
                 )
                 row_data.append(count)
             matrix.append(row_data)
@@ -219,7 +228,7 @@ class ChartGenerator:
                 if val > 0:
                     ax.text(j, i, str(val), ha="center", va="center", fontsize=10, fontweight="bold")
 
-        fig.colorbar(im, ax=ax, shrink=0.8, label=_label("错误数量", "Error Count"))
+        fig.colorbar(im, ax=ax, shrink=0.8, label=_label("模型数量", "Model Count"))
         fig.tight_layout()
 
         path = self.output_dir / filename
