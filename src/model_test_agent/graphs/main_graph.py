@@ -47,11 +47,14 @@ from model_test_agent.tools.report_generator import ReportGenerator
 
 def _extract(state: AgentState) -> dict[str, Any]:
     """Node 1: extract errors from logs and load model configs."""
-    log_dir = state.get("log_dir", "")
+    target_dir = state.get("target_dir") or state.get("log_dir", "")
     config_path = state.get("config_path", "")
 
     models: list[ModelInfo] = []
-    if config_path:
+    if target_dir:
+        reader = ConfigReader()
+        models = reader.read_target_directory(target_dir)
+    elif config_path:
         reader = ConfigReader()
         models = reader.read_file(config_path)
 
@@ -62,8 +65,8 @@ def _extract(state: AgentState) -> dict[str, Any]:
         for model in explicit_logs:
             for path in _expand_paths(model.log_path):
                 errors.extend(extractor.extract_from_file(path, model_name=model.name))
-    elif log_dir:
-        errors = extractor.extract_from_directory(log_dir)
+    elif target_dir:
+        errors = extractor.extract_from_target_directory(target_dir)
 
     return {"errors": errors, "models": models}
 

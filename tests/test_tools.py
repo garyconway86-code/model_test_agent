@@ -61,6 +61,17 @@ class TestLogExtractor:
         assert len(entries) == 1
         assert entries[0].model_name == "01-1_yolo"
 
+    def test_extract_from_target_directory_uses_first_level_model_dirs(self, tmp_path: Path) -> None:
+        model_log = tmp_path / "Models_35" / "02-1_qwen2" / "runs" / "20260312" / "convert.log"
+        model_log.parent.mkdir(parents=True)
+        model_log.write_text("[ERROR] missing operator: demo\n", encoding="utf-8")
+
+        extractor = LogExtractor(context_lines=0)
+        entries = extractor.extract_from_target_directory(tmp_path / "Models_35")
+
+        assert len(entries) == 1
+        assert entries[0].model_name == "02-1_qwen2"
+
     def test_no_errors_returns_empty(self, tmp_path: Path) -> None:
         log = tmp_path / "clean.log"
         log.write_text("[INFO] All good\n[INFO] Conversion successful\n")
@@ -134,6 +145,18 @@ class TestConfigReader:
 
         assert [model.name for model in models] == ["01-1_yolo", "02-1_bert"]
         assert str(model_a) in {model.config_path for model in models}
+
+    def test_read_target_directory_uses_first_level_model_dirs(self, tmp_path: Path) -> None:
+        model_dir = tmp_path / "Models_35" / "01-1_yolo"
+        model_dir.mkdir(parents=True)
+        (model_dir / "model_config.yaml").write_text("quantization: int8\n", encoding="utf-8")
+        (model_dir / "package_info.json").write_text('{"version": "1.0.0"}', encoding="utf-8")
+
+        models = ConfigReader.read_target_directory(tmp_path / "Models_35")
+
+        assert len(models) == 1
+        assert models[0].name == "01-1_yolo"
+        assert models[0].package_info_path.endswith("package_info.json")
 
     def test_read_file_resolves_relative_model_paths(self, tmp_path: Path) -> None:
         cfg = tmp_path / "models.yaml"

@@ -1,7 +1,0 @@
-[2026-03-10 14:30:01] INFO: Starting conversion for llama2-7b (int4)
-[2026-03-10 14:30:05] INFO: Loading checkpoint from /data/models/llama2-7b/consolidated.pth
-[2026-03-10 14:30:15] INFO: Checkpoint loaded (13.5 GB)
-[2026-03-10 14:30:16] INFO: Beginning int4 quantization...
-[2026-03-10 14:32:01] ERROR: CUDA out of memory. Tried to allocate 2.50 GiB (GPU 0; 24.00 GiB total; 21.3 GiB already allocated)
-[2026-03-10 14:32:01] ERROR: Cannot allocate 2684354560 bytes on device cuda:0
-[2026-03-10 14:32:02] INFO: Conversion FAILED for llama2-7b

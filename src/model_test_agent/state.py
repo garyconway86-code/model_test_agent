@@ -89,6 +89,7 @@ class AgentState(TypedDict, total=False):
     """Full pipeline state.  Subgraphs may use a subset of these keys."""
 
     # --- Inputs ---
+    target_dir: str
     log_dir: str
     config_path: str
     output_dir: str

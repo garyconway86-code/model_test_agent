@@ -1,8 +1,0 @@
-[2026-03-10 14:33:01] INFO: Starting conversion for mobilenet-v3 (fp16)
-[2026-03-10 14:33:02] INFO: Loading checkpoint from /data/models/mobilenet-v3/model.pth
-[2026-03-10 14:33:03] INFO: Parsing layer structure...
-[2026-03-10 14:33:04] INFO: Running inference test...
-[2026-03-10 14:33:05] WARNING: tensor contains nan at layer classifier.3 — numerical instability detected
-[2026-03-10 14:33:05] ERROR: Numerical error: output tensor contains nan values after conversion
-[2026-03-10 14:33:06] ERROR: Validation failed — max absolute error exceeds threshold (inf > 1e-3)
-[2026-03-10 14:33:07] INFO: Conversion FAILED for mobilenet-v3

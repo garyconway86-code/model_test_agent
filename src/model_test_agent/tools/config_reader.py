@@ -68,6 +68,33 @@ class ConfigReader:
                     results.append(info)
         return results
 
+    @staticmethod
+    def read_target_directory(target_dir: str | Path) -> list[ModelInfo]:
+        """Read one model config from each immediate child directory in *target_dir*."""
+        results: list[ModelInfo] = []
+        root = Path(target_dir)
+        for model_dir in sorted(path for path in root.iterdir() if path.is_dir()):
+            cfg_path = ConfigReader._find_model_config(model_dir)
+            if cfg_path:
+                models = ConfigReader.read_file(cfg_path)
+            else:
+                models = [ModelInfo(name=model_dir.name)]
+
+            for model in models:
+                package_info_path = model.package_info_path or str(model_dir / "package_info.json")
+                if not Path(package_info_path).exists():
+                    package_info_path = ""
+                results.append(ModelInfo(
+                    name=model.name or model_dir.name,
+                    quantization=model.quantization,
+                    has_test_data=model.has_test_data,
+                    config_path=model.config_path or str(cfg_path or ""),
+                    log_path=model.log_path,
+                    package_info_path=package_info_path,
+                    extra={**model.extra, "model_dir": str(model_dir.resolve())},
+                ))
+        return results
+
     # ------------------------------------------------------------------
 
     @staticmethod
@@ -123,3 +150,22 @@ class ConfigReader:
         if path.is_absolute() or source_path is None:
             return str(path)
         return str((source_path.parent / path).resolve())
+
+    @staticmethod
+    def _find_model_config(model_dir: Path) -> Path | None:
+        preferred = [
+            model_dir / "model_config.yaml",
+            model_dir / "model_config.yml",
+            model_dir / "config.yaml",
+            model_dir / "config.yml",
+        ]
+        for path in preferred:
+            if path.exists():
+                return path
+
+        candidates = [
+            path for pattern in ("*.yaml", "*.yml")
+            for path in sorted(model_dir.rglob(pattern))
+            if path.name != "package_info.json"
+        ]
+        return candidates[0] if candidates else None

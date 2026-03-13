@@ -1,6 +1,0 @@
-[2026-03-10 14:25:01] INFO: Starting conversion for bert-base (fp16)
-[2026-03-10 14:25:02] INFO: Loading checkpoint from /data/models/bert-base/model.bin
-[2026-03-10 14:25:03] INFO: Detected source dtype: bfloat16
-[2026-03-10 14:25:03] ERROR: unsupported dtype: bfloat16 — target backend does not support this data type
-[2026-03-10 14:25:04] ERROR: cannot cast bfloat16 to float16 without explicit conversion flag
-[2026-03-10 14:25:05] INFO: Conversion FAILED for bert-base

@@ -52,30 +52,29 @@ model-test-agent
 
 ```bash
 # 完整流程
-model-test-agent --log-dir ./logs --config ./models.yaml --output ./output
+model-test-agent --target-dir ./Models_35 --output ./output
 
 # 仅分类
-model-test-agent --log-dir ./logs --mode classify
+model-test-agent --target-dir ./Models_35 --mode classify
 
 # 仅调试分析
-model-test-agent --log-dir ./logs --config ./models.yaml --mode debug
+model-test-agent --target-dir ./Models_35 --mode debug
 
 # SNR 分析（独立子图）
-model-test-agent --config ./models.yaml --mode snr
+model-test-agent --target-dir ./Models_35 --mode snr
 
 # 英文界面
-model-test-agent --locale en
+model-test-agent --target-dir ./Models_35 --locale en
 
 # 跳过启动前 LLM 健康检查
-model-test-agent --skip-health-check
+model-test-agent --target-dir ./Models_35 --skip-health-check
 ```
 
 ### 参数说明
 
 | 参数 | 默认值 | 说明 |
 |------|--------|------|
-| `--log-dir` | — | 日志目录路径（非 SNR 模式必填） |
-| `--config` | — | 模型配置文件路径（YAML） |
+| `--target-dir` | — | 目标目录路径。目录下每个一级子目录视为一个测试模型目录 |
 | `--output` | `./output` | 报告和图表的输出目录 |
 | `--mode` | `full` | 运行模式：`full` 完整流程 / `classify` 仅分类 / `debug` 仅调试分析 / `snr` 仅 SNR 分析 |
 | `--auto-fix` | `false` | 自动在 Docker 中执行修复命令 |
@@ -91,27 +90,15 @@ model-test-agent --skip-health-check
 
 ```bash
 model-test-agent \
-  --log-dir examples/sample_logs \
-  --config examples/sample_config/models.yaml \
-  --output ./output \
-  --mode classify
-```
-
-更贴近真实目录结构的 demo：
-
-```bash
-model-test-agent \
-  --log-dir examples/demo_models/Models_35 \
-  --config examples/demo_layout/models_35_demo.yaml \
+  --target-dir examples/demo_models/Models_35 \
   --output ./output/demo \
   --mode full
 ```
 
-这个 demo 里每个模型都可以在配置里显式指定：
-- `log_path`: 当前模型本次运行的日志文件路径
-- `package_info_path`: 当前模型目录下的 `package_info.json`
-
-显式路径存在时，Agent 会优先使用这些固定路径，而不是自己猜目录结构。
+`target-dir` 下面每个一级子目录都会被当成一个模型目录处理，程序会在该子目录内部读取：
+- 配置脚本（如 `model_config.yaml` / `config.yaml`）
+- `package_info.json`
+- 运行日志（递归查找 `.log`）
 
 ### `python -m` 什么时候用
 
@@ -171,7 +158,7 @@ pytest tests/ -v
 model_test_agent/
 ├── config/                 # 配置文件（LLM、关键词、报告、国际化）
 ├── history/                # 历史调试案例
-├── examples/               # 示例日志和配置
+├── examples/               # 示例模型目录
 ├── src/model_test_agent/
 │   ├── tools/              # 工具层：日志提取、配置读取、Docker执行、报告生成
 │   ├── skills/             # 技能层：错误分类、调试分析（依赖LLM）

@@ -216,7 +216,7 @@ class TestGraphConstruction:
         explicit_log.write_text("[ERROR] unsupported dtype\n", encoding="utf-8")
 
         monkeypatch.setattr(
-            "model_test_agent.graphs.main_graph.ConfigReader.read_file",
+            "model_test_agent.graphs.main_graph.ConfigReader.read_target_directory",
             lambda self, path: [
                 ModelInfo(
                     name="01-1_yolo",
@@ -226,11 +226,11 @@ class TestGraphConstruction:
             ],
         )
         monkeypatch.setattr(
-            "model_test_agent.graphs.main_graph.LogExtractor.extract_from_directory",
+            "model_test_agent.graphs.main_graph.LogExtractor.extract_from_target_directory",
             lambda self, path: (_ for _ in ()).throw(AssertionError("directory scan should not be used")),
         )
 
-        result = _extract({"log_dir": str(tmp_path), "config_path": str(tmp_path / "models.yaml")})
+        result = _extract({"target_dir": str(tmp_path / "Models_35")})
 
         assert len(result["errors"]) == 1
         assert result["errors"][0].model_name == "01-1_yolo"

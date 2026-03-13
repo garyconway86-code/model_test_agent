@@ -107,6 +107,16 @@ class LogExtractor:
             results.extend(self.extract_from_file(path, model_name=model_name))
         return results
 
+    def extract_from_target_directory(self, target_dir: str | Path, suffix: str = ".log") -> list[ErrorEntry]:
+        """Extract logs from each immediate child model directory under *target_dir*."""
+        self._ensure_loaded()
+        results: list[ErrorEntry] = []
+        root = Path(target_dir)
+        for model_dir in sorted(path for path in root.iterdir() if path.is_dir()):
+            for path in sorted(model_dir.rglob(f"*{suffix}")):
+                results.extend(self.extract_from_file(path, model_name=model_dir.name))
+        return results
+
     # ------------------------------------------------------------------
     # Internals
     # ------------------------------------------------------------------

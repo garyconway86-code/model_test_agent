@@ -17,8 +17,6 @@ class TestCLIHelpers:
 
     def test_extract_snapshot_includes_paths_and_sample_hits(self, tmp_path) -> None:
         state = {
-            "log_dir": str(tmp_path),
-            "config_path": str(tmp_path / "models.yaml"),
             "errors": [
                 ErrorEntry(
                     model_name="resnet50",
@@ -81,7 +79,7 @@ class TestCLIHelpers:
         assert any("m2:10 [dtype] ERROR unsupported dtype -> dtype_error" in line for line in lines)
 
     def test_snapshot_titles_match_panel_content(self) -> None:
-        assert _step_snapshot_title("extract", {"log_dir": "/tmp/x", "config_path": "/tmp/y"}) == "输入路径"
+        assert _step_snapshot_title("extract", {"target_dir": "/tmp/x"}) == "输入路径"
         assert _step_snapshot_title("extract", {"errors": [], "models": []}) == "提取摘要"
         assert _step_snapshot_title("extract", {"errors": [object()], "models": []}) == "提取摘要"
         assert _step_snapshot_title("classification", {"errors": [], "error_groups": {}}) == "分类摘要"
@@ -114,7 +112,7 @@ class TestCLIHelpers:
             [
                 "model-test-agent",
                 "--skip-health-check",
-                "--log-dir",
+                "--target-dir",
                 str(tmp_path),
                 "--llm-config",
                 str(tmp_path / "llm.yaml"),
@@ -124,9 +122,9 @@ class TestCLIHelpers:
 
         cli.main()
 
-        assert captured["args"][3] == str(tmp_path / "llm.yaml")
+        assert captured["args"][2] == str(tmp_path / "llm.yaml")
 
-    def test_main_allows_config_only_run(self, monkeypatch, tmp_path) -> None:
+    def test_main_requires_target_dir_for_run(self, monkeypatch, tmp_path) -> None:
         captured = {}
         monkeypatch.setattr(
             sys,
@@ -134,13 +132,13 @@ class TestCLIHelpers:
             [
                 "model-test-agent",
                 "--skip-health-check",
-                "--config",
-                str(tmp_path / "models.yaml"),
+                "--target-dir",
+                str(tmp_path),
             ],
         )
         monkeypatch.setattr(cli, "_run_full_pipeline", lambda *args: captured.setdefault("args", args))
 
         cli.main()
 
-        assert captured["args"][0] == ""
-        assert captured["args"][1] == str(tmp_path / "models.yaml")
+        assert captured["args"][0] == str(tmp_path)
+        assert captured["args"][1] == "./output"

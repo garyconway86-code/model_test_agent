@@ -29,8 +29,7 @@ def _parse_args() -> argparse.Namespace:
         prog="model-test-agent",
         description="模型转换测试分析 Agent — 自动化错误分析与修复建议",
     )
-    parser.add_argument("--log-dir", type=str, help="日志目录路径")
-    parser.add_argument("--config", type=str, help="模型配置文件路径")
+    parser.add_argument("--target-dir", type=str, help="目标目录路径（目录下每个子目录是一个测试模型）")
     parser.add_argument("--output", type=str, default="./output", help="输出目录（默认: ./output）")
     parser.add_argument(
         "--mode",
@@ -54,8 +53,7 @@ def _interactive_setup() -> dict:
     ui.show_banner()
     console.print()
 
-    log_dir = prompter.ask_path(t("prompt_log_dir"), only_directories=True)
-    config_path = prompter.ask_path(t("prompt_config"), default="")
+    target_dir = prompter.ask_path(t("prompt_target_dir"), only_directories=True)
     output_dir = prompter.ask_path(t("prompt_output"), default="./output", only_directories=True)
 
     # Mode selection
@@ -73,8 +71,7 @@ def _interactive_setup() -> dict:
         auto_fix = prompter.confirm(t("prompt_run_fix"), default=False)
 
     return {
-        "log_dir": log_dir,
-        "config_path": config_path,
+        "target_dir": target_dir,
         "output_dir": output_dir,
         "llm_config_path": "",
         "mode": mode,
@@ -152,15 +149,13 @@ def _format_error_sample(err) -> str:
 
 def _step_snapshot_lines(step_key: str, state: dict) -> list[str]:
     if step_key == "extract" and "errors" not in state and "models" not in state:
-        log_dir = Path(state.get("log_dir", ""))
-        config_path = state.get("config_path") or "-"
-        log_files = [str(p) for p in sorted(log_dir.rglob("*.log"))[:3]] if log_dir.is_dir() else []
+        target_dir = Path(state.get("target_dir", ""))
+        model_dirs = [p.name for p in sorted(path for path in target_dir.iterdir() if path.is_dir())[:4]] if target_dir.is_dir() else []
         lines = [
-            f"log_dir: {log_dir or '-'}",
-            f"config: {config_path}",
+            f"target_dir: {target_dir or '-'}",
         ]
-        if log_files:
-            lines.append(f"log_files: {', '.join(log_files)}")
+        if model_dirs:
+            lines.append(f"model_dirs: {', '.join(model_dirs)}")
         return lines
 
     if step_key == "extract":
@@ -236,8 +231,7 @@ def _show_step_snapshot(step_key: str, state: dict) -> None:
 
 
 def _run_full_pipeline(
-    log_dir: str,
-    config_path: str,
+    target_dir: str,
     output_dir: str,
     llm_config_path: str,
     max_retries: int,
@@ -255,8 +249,7 @@ def _run_full_pipeline(
         )
 
         initial_state = {
-            "log_dir": log_dir,
-            "config_path": config_path,
+            "target_dir": target_dir,
             "output_dir": output_dir,
             "llm_config_path": llm_config_path,
             "auto_fix": auto_fix,
@@ -329,21 +322,17 @@ def _run_full_pipeline(
         ui.show_completion(report_path, report_html_path)
 
 
-def _run_classify_only(log_dir: str, config_path: str, output_dir: str, llm_config_path: str) -> None:
+def _run_classify_only(target_dir: str, output_dir: str, llm_config_path: str) -> None:
     """Run only the classification subgraph."""
     from model_test_agent.graphs.classification_subgraph import build_classification_subgraph
-    from model_test_agent.tools.config_reader import ConfigReader
-    from model_test_agent.tools.log_extractor import LogExtractor
+    from model_test_agent.graphs.main_graph import _extract
 
     console.print(f"\n[bold blue]{t('step_extract')}...[/bold blue]")
-    _show_step_snapshot("extract", {"log_dir": log_dir, "config_path": config_path})
-    extractor = LogExtractor()
-    errors = extractor.extract_from_directory(log_dir)
-
-    models = []
-    if config_path:
-        models = ConfigReader.read_file(config_path)
-    _show_step_snapshot("extract", {"errors": errors, "models": models})
+    _show_step_snapshot("extract", {"target_dir": target_dir})
+    extracted = _extract({"target_dir": target_dir})
+    errors = extracted.get("errors", [])
+    models = extracted.get("models", [])
+    _show_step_snapshot("extract", extracted)
 
     console.print(f"[bold blue]{t('step_classify')}...[/bold blue]")
     graph = build_classification_subgraph().compile()
@@ -363,8 +352,7 @@ def _run_classify_only(log_dir: str, config_path: str, output_dir: str, llm_conf
 
 
 def _run_debug_only(
-    log_dir: str,
-    config_path: str,
+    target_dir: str,
     output_dir: str,
     llm_config_path: str,
     max_retries: int,
@@ -373,15 +361,14 @@ def _run_debug_only(
     """Run classification + debug subgraph (skip reporting)."""
     from model_test_agent.graphs.classification_subgraph import build_classification_subgraph
     from model_test_agent.graphs.debug_subgraph import build_debug_subgraph
-    from model_test_agent.tools.config_reader import ConfigReader
-    from model_test_agent.tools.log_extractor import LogExtractor
+    from model_test_agent.graphs.main_graph import _extract
 
     console.print(f"\n[bold blue]{t('step_extract')}...[/bold blue]")
-    _show_step_snapshot("extract", {"log_dir": log_dir, "config_path": config_path})
-    extractor = LogExtractor()
-    errors = extractor.extract_from_directory(log_dir)
-    models = ConfigReader.read_file(config_path) if config_path else []
-    _show_step_snapshot("extract", {"errors": errors, "models": models})
+    _show_step_snapshot("extract", {"target_dir": target_dir})
+    extracted = _extract({"target_dir": target_dir})
+    errors = extracted.get("errors", [])
+    models = extracted.get("models", [])
+    _show_step_snapshot("extract", extracted)
 
     console.print(f"[bold blue]{t('step_classify')}...[/bold blue]")
     cls_graph = build_classification_subgraph().compile()
@@ -414,14 +401,14 @@ def _run_debug_only(
         console.print(f"  [dim]图表: {', '.join(chart_paths)}[/dim]")
 
 
-def _run_snr_only(config_path: str) -> None:
+def _run_snr_only(target_dir: str) -> None:
     """Run only the SNR subgraph."""
     from model_test_agent.graphs.snr_subgraph import build_snr_subgraph
     from model_test_agent.tools.config_reader import ConfigReader
 
-    models = ConfigReader.read_file(config_path) if config_path else []
+    models = ConfigReader.read_target_directory(target_dir) if target_dir else []
     if not models:
-        console.print(f"[bold red]{t('error_no_config')}[/bold red]")
+        console.print(f"[bold red]{t('error_no_target')}[/bold red]")
         return
 
     console.print("\n[bold blue]运行 layerwise SNR 分析...[/bold blue]")
@@ -496,43 +483,38 @@ def main() -> None:
                 console.print(f"  图结构已导出: [underline]{out}[/underline]")
         return
 
-    # If neither explicit args nor config is provided, enter interactive mode
-    if not args.log_dir and not args.config:
+    # If no target-dir is provided, enter interactive mode
+    if not args.target_dir:
         settings = _interactive_setup()
     else:
         settings = {
-            "log_dir": args.log_dir or "",
-            "config_path": args.config or "",
+            "target_dir": args.target_dir,
             "output_dir": args.output,
             "llm_config_path": args.llm_config or "",
             "mode": args.mode,
             "auto_fix": args.auto_fix,
         }
 
-    log_dir = settings["log_dir"]
-    config_path = settings["config_path"]
+    target_dir = settings["target_dir"]
     output_dir = settings["output_dir"]
     llm_config_path = settings.get("llm_config_path", "")
     mode = settings["mode"]
 
-    # Validate log directory
-    if mode != "snr" and log_dir and not Path(log_dir).is_dir():
-        console.print(f"[bold red]{t('error_no_logs')}: {log_dir}[/bold red]")
-        sys.exit(1)
-    if mode != "snr" and not log_dir and not config_path:
-        console.print(f"[bold red]{t('error_no_logs')}[/bold red]")
+    # Validate target directory
+    if not Path(target_dir).is_dir():
+        console.print(f"[bold red]{t('error_no_target')}: {target_dir}[/bold red]")
         sys.exit(1)
 
     Path(output_dir).mkdir(parents=True, exist_ok=True)
 
     if mode == "full":
-        _run_full_pipeline(log_dir, config_path, output_dir, llm_config_path, args.max_retries, settings["auto_fix"])
+        _run_full_pipeline(target_dir, output_dir, llm_config_path, args.max_retries, settings["auto_fix"])
     elif mode == "classify":
-        _run_classify_only(log_dir, config_path, output_dir, llm_config_path)
+        _run_classify_only(target_dir, output_dir, llm_config_path)
     elif mode == "debug":
-        _run_debug_only(log_dir, config_path, output_dir, llm_config_path, args.max_retries, settings["auto_fix"])
+        _run_debug_only(target_dir, output_dir, llm_config_path, args.max_retries, settings["auto_fix"])
     elif mode == "snr":
-        _run_snr_only(config_path)
+        _run_snr_only(target_dir)
 
 
 if __name__ == "__main__":

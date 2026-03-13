@@ -1,7 +1,0 @@
-[2026-03-10 14:37:01] INFO: Starting conversion for vit-base (int8)
-[2026-03-10 14:37:02] INFO: Loading checkpoint from /data/models/vit-base/model.pth
-[2026-03-10 14:37:03] INFO: Parsing layer structure...
-[2026-03-10 14:37:04] WARNING: unexpected keys in state_dict: ['module.cls_token', 'module.pos_embed']
-[2026-03-10 14:37:04] ERROR: missing keys: ['cls_token', 'pos_embed'] — checkpoint may have been saved with DataParallel wrapper
-[2026-03-10 14:37:05] ERROR: Weight loading failed: state_dict key mismatch (2 missing, 2 unexpected)
-[2026-03-10 14:37:06] INFO: Conversion FAILED for vit-base
