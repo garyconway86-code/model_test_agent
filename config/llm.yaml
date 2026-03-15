@@ -18,25 +18,25 @@
 default:
   base_url: "https://api.deepseek.com/v1"
   api_key: "${DEEPSEEK_API_KEY}"
-  model: "deepseek-chat"
+  model: "${MTA_MODEL_DEFAULT}"
   temperature: 0.1
   max_tokens: 4096
   timeout: 120
 
-# Profile for error classification — smaller, faster model
+# Profile for error classification
 classifier:
   base_url: "https://api.deepseek.com/v1"
   api_key: "${DEEPSEEK_API_KEY}"
-  model: "deepseek-chat"
+  model: "${MTA_MODEL_DEFAULT}"
   temperature: 0.0
   max_tokens: 2048
   timeout: 60
 
-# Profile for debug analysis — larger model for reasoning
+# Profile for debug analysis
 debugger:
   base_url: "https://api.deepseek.com/v1"
   api_key: "${DEEPSEEK_API_KEY}"
-  model: "deepseek-chat"
+  model: "${MTA_MODEL_DEFAULT}"
   temperature: 0.2
   max_tokens: 4096
   timeout: 180
@@ -45,13 +45,13 @@ debugger:
 embedding:
   base_url: "${EMBED_BASE_URL}"
   api_key: "${EMBED_API_KEY}"
-  model: "text-embedding-v3"
+  model: "${EMBED_MODEL}"
   timeout: 10
 
 # Reranker service — Cohere-compatible /rerank endpoint
 reranker:
   base_url: "${RERANK_BASE_URL}"
   api_key: "${RERANK_API_KEY}"
-  model: "rerank-v1"
+  model: "${RERANK_MODEL}"
   top_n: 3
   timeout: 10

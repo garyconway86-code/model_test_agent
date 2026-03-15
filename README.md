@@ -40,6 +40,12 @@ pip install -e .
 
 Python 最低版本现在是 `3.10`，推荐直接用 `3.11`。
 
+安装完成后，先复制环境变量示例并填入你自己的 key：
+
+```bash
+cp .env.example .env
+```
+
 ## 使用
 
 ### 交互模式（中文界面）
@@ -121,6 +127,13 @@ python -m model_test_agent
 | `config/report.yaml` | 报告列定义和样式配置 |
 | `config/i18n.yaml` | 中英文界面文案 |
 | `history/cases.json` | 历史调试案例存储 |
+
+默认的 `config/llm.yaml` 已经按 DeepSeek 接口预置，通常只需要在 `.env` 里填写：
+
+```bash
+DEEPSEEK_API_KEY=your-key
+MTA_MODEL_DEFAULT=deepseek-chat
+```
 
 ### 添加新的 LLM Profile
 
