@@ -544,6 +544,20 @@ _HTML_TEMPLATE = """\
     position: sticky;
     top: 0;
     white-space: nowrap;
+    position: sticky;
+  }}
+  table.report th.resizable {{
+    position: sticky;
+  }}
+  .column-resizer {{
+    position: absolute;
+    top: 0;
+    right: -3px;
+    width: 8px;
+    height: 100%;
+    cursor: col-resize;
+    user-select: none;
+    touch-action: none;
   }}
   table.report td {{
     padding: 8px 12px;
@@ -725,6 +739,36 @@ _HTML_TEMPLATE = """\
     const canOpenLocalFiles = window.location.protocol === "file:";
     let toastTimer = null;
     let saveTimer = null;
+
+    function enableColumnResize() {{
+      const table = document.querySelector("table.report");
+      if (!table) return;
+      const headers = Array.from(table.querySelectorAll("th"));
+      headers.forEach((header) => {{
+        header.classList.add("resizable");
+        const handle = document.createElement("span");
+        handle.className = "column-resizer";
+        let startX = 0;
+        let startWidth = 0;
+        const onMove = (event) => {{
+          const nextWidth = Math.max(90, startWidth + event.clientX - startX);
+          header.style.width = `${{nextWidth}}px`;
+          header.style.minWidth = `${{nextWidth}}px`;
+        }};
+        const onUp = () => {{
+          document.removeEventListener("mousemove", onMove);
+          document.removeEventListener("mouseup", onUp);
+        }};
+        handle.addEventListener("mousedown", (event) => {{
+          startX = event.clientX;
+          startWidth = header.getBoundingClientRect().width;
+          document.addEventListener("mousemove", onMove);
+          document.addEventListener("mouseup", onUp);
+          event.preventDefault();
+        }});
+        header.appendChild(handle);
+      }});
+    }}
 
     function loadReviewState() {{
       try {{
@@ -1106,6 +1150,7 @@ _HTML_TEMPLATE = """\
       }});
     }});
 
+    enableColumnResize();
     applyFilters();
     void hydrateRemoteReviewState();
   }});

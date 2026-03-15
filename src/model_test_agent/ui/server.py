@@ -83,6 +83,9 @@ class _UIServerRequestHandler(BaseHTTPRequestHandler):
         if request.path == "/api/fs":
             self._handle_fs(request.query)
             return
+        if request.path == "/api/file":
+            self._handle_get_file(request.query)
+            return
         if request.path == "/api/job":
             self._write_json(HTTPStatus.OK, self._app.runner.latest().to_dict())
             return
@@ -128,14 +131,18 @@ class _UIServerRequestHandler(BaseHTTPRequestHandler):
 
     def do_PUT(self) -> None:  # noqa: N802
         request = urlsplit(self.path)
-        if request.path != "/api/review-state":
-            self.send_error(HTTPStatus.NOT_FOUND, "Not found")
+        if request.path == "/api/review-state":
+            self._handle_put_review_state(request.query)
             return
-        self._handle_put_review_state(request.query)
+        if request.path == "/api/file":
+            self._handle_put_file(request.query)
+            return
+        self.send_error(HTTPStatus.NOT_FOUND, "Not found")
 
     def _handle_fs(self, query: str) -> None:
         params = parse_qs(query)
         requested = str(params.get("path", [""])[0] or "")
+        mode = str(params.get("mode", ["dir"])[0] or "dir")
         current = Path(requested).expanduser() if requested else Path.cwd()
         if current.is_file():
             current = current.parent
@@ -143,17 +150,77 @@ class _UIServerRequestHandler(BaseHTTPRequestHandler):
         if not current.exists():
             self._write_json(HTTPStatus.NOT_FOUND, {"error": f"Path not found: {current}"})
             return
-        directories = [
-            {"name": item.name or str(item), "path": str(item.resolve())}
-            for item in sorted(current.iterdir(), key=lambda entry: (not entry.is_dir(), entry.name.lower()))
-            if item.is_dir()
-        ]
+        entries = []
+        for item in sorted(current.iterdir(), key=lambda entry: (not entry.is_dir(), entry.name.lower())):
+            if item.is_dir():
+                entries.append({"name": item.name or str(item), "path": str(item.resolve()), "kind": "dir"})
+            elif mode == "file":
+                entries.append({"name": item.name or str(item), "path": str(item.resolve()), "kind": "file"})
         self._write_json(
             HTTPStatus.OK,
             {
                 "path": str(current),
                 "parent": str(current.parent if current.parent != current else current),
-                "directories": directories,
+                "entries": entries,
+            },
+        )
+
+    def _handle_get_file(self, query: str) -> None:
+        try:
+            path = self._resolve_any_path(query)
+        except FileNotFoundError:
+            self._write_json(HTTPStatus.NOT_FOUND, {"error": "File not found"})
+            return
+        if not path.is_file():
+            self._write_json(HTTPStatus.BAD_REQUEST, {"error": "Path is not a file"})
+            return
+        try:
+            content = path.read_text(encoding="utf-8")
+        except UnicodeDecodeError:
+            content = path.read_text(encoding="utf-8", errors="replace")
+        except OSError as exc:
+            self._write_json(HTTPStatus.INTERNAL_SERVER_ERROR, {"error": str(exc)})
+            return
+        self._write_json(
+            HTTPStatus.OK,
+            {
+                "path": str(path),
+                "name": path.name,
+                "size": path.stat().st_size,
+                "kind": path.suffix or "file",
+                "editable": True,
+                "hint": self._file_hint(path, content),
+                "content": content,
+            },
+        )
+
+    def _handle_put_file(self, query: str) -> None:
+        try:
+            path = self._resolve_any_path(query)
+        except FileNotFoundError:
+            self._write_json(HTTPStatus.NOT_FOUND, {"error": "File not found"})
+            return
+        payload = self._read_json_body()
+        if payload is None:
+            self._write_json(HTTPStatus.BAD_REQUEST, {"error": "Invalid JSON payload"})
+            return
+        if not path.is_file():
+            self._write_json(HTTPStatus.BAD_REQUEST, {"error": "Path is not a file"})
+            return
+        content = str(payload.get("content", ""))
+        try:
+            path.write_text(content, encoding="utf-8")
+        except OSError as exc:
+            self._write_json(HTTPStatus.INTERNAL_SERVER_ERROR, {"error": str(exc)})
+            return
+        self._write_json(
+            HTTPStatus.OK,
+            {
+                "ok": True,
+                "path": str(path),
+                "name": path.name,
+                "size": path.stat().st_size,
+                "kind": path.suffix or "file",
             },
         )
 
@@ -212,6 +279,28 @@ class _UIServerRequestHandler(BaseHTTPRequestHandler):
         if not route_path:
             raise FileNotFoundError("Missing report path")
         return self._app.report_path_from_route(route_path)
+
+    def _resolve_any_path(self, query: str) -> Path:
+        params = parse_qs(query)
+        raw_path = str(params.get("path", [""])[0] or "")
+        if not raw_path:
+            raise FileNotFoundError("Missing path")
+        resolved = Path(raw_path).expanduser().resolve()
+        if not resolved.exists():
+            raise FileNotFoundError(resolved)
+        return resolved
+
+    @staticmethod
+    def _file_hint(path: Path, content: str) -> str:
+        if path.suffix in {".yaml", ".yml"}:
+            lines = [line.strip() for line in content.splitlines() if line.strip() and not line.strip().startswith("#")]
+            return lines[0][:120] if lines else "YAML 配置文件"
+        if path.suffix == ".json":
+            return "JSON 配置文件"
+        if path.suffix == ".sh":
+            commands = [line.strip() for line in content.splitlines() if line.strip() and not line.strip().startswith("#")]
+            return commands[0][:120] if commands else "Shell 脚本"
+        return "可直接编辑的文本文件"
 
     def _read_json_body(self) -> dict[str, Any] | None:
         try:

@@ -562,6 +562,7 @@ class TestReportGenerator:
         assert "01-1_yolo.yaml | Config/legacy.yaml" in content
         assert 'data-filter-kind="checked"' in content
         assert "Unchecked" in content
+        assert "column-resizer" in content
         assert 'data-checked="false"' in content
         assert "cell-fix_result" in content
         assert "needs compiler owner follow-up" in content
