@@ -30,6 +30,10 @@ class TestUIServer:
             assert "Converter_result/convert/.log/" in content
             assert "PID" in content
             assert str(os.getpid()) in content
+            assert "LLM 健康度" in content
+            assert "Embedding / Reranker 不可用时会自动降级，不会阻断主流程" in content
+            assert "RAG 会自动退回本地词法检索" in content
+            assert "跳过 reranker，保留原始检索结果顺序，主流程仍可继续" in content
             assert 'id="job-log"' in content
         finally:
             server_info.server.shutdown()
@@ -171,6 +175,35 @@ class TestUIServer:
             assert payload["status"] == "completed"
             assert payload["detail"] == "Loaded existing report"
             assert payload["report_html_path"].endswith("report.html")
+        finally:
+            server_info.server.shutdown()
+            server_info.server.server_close()
+            thread.join(timeout=2)
+
+    def test_llm_health_api_returns_profiles(self, monkeypatch) -> None:
+        monkeypatch.setattr(
+            "model_test_agent.ui.server.check_all_profiles",
+            lambda config_path="", timeout=6: [
+                {
+                    "ok": True,
+                    "profile": "default",
+                    "kind": "chat",
+                    "model": "demo-model",
+                    "latency_ms": 12.3,
+                    "error": "",
+                }
+            ],
+        )
+
+        server_info = create_ui_server(port=0)
+        thread = threading.Thread(target=server_info.server.serve_forever, daemon=True)
+        thread.start()
+        try:
+            payload = json.loads(urlopen(f"{server_info.base_url}/api/llm-health").read().decode("utf-8"))
+            assert payload["ok"] is True
+            assert payload["healthy"] == 1
+            assert payload["total"] == 1
+            assert payload["profiles"][0]["profile"] == "default"
         finally:
             server_info.server.shutdown()
             server_info.server.server_close()

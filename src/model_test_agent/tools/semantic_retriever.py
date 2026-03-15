@@ -12,7 +12,7 @@ from pathlib import Path
 from openai import OpenAI
 
 from model_test_agent.debug_config import load_debug_settings
-from model_test_agent.llm.client import _load_profiles
+from model_test_agent.llm.client import _load_profiles, _profile_is_configured
 from model_test_agent.tools.history_store import HistoryStore
 from model_test_agent.tools.knowledge_base import KnowledgeBase
 
@@ -72,7 +72,7 @@ class SemanticRetriever:
             return self._embedding_client
         profiles = _load_profiles(self.config_path) if self.config_path else _load_profiles()
         cfg = profiles.get("embedding")
-        if not cfg:
+        if not cfg or not _profile_is_configured(cfg):
             return None
         self._embedding_client = OpenAI(
             base_url=cfg["base_url"],
@@ -85,4 +85,6 @@ class SemanticRetriever:
         """Return the configured embedding model, if any."""
         profiles = _load_profiles(self.config_path) if self.config_path else _load_profiles()
         cfg = profiles.get("embedding") or {}
+        if not _profile_is_configured(cfg):
+            return ""
         return str(cfg.get("model", ""))

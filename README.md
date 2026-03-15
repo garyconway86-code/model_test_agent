@@ -28,14 +28,27 @@ Python 最低版本是 `3.10`。
 
 ### 2. 配 LLM
 
-默认的 [llm.yaml](/Users/wu/Documents/projects/model_test_agent/config/llm.yaml) 已按 DeepSeek 预置，通常只需要在 `.env` 里填：
+默认的 [llm.yaml](/Users/wu/Documents/projects/model_test_agent/config/llm.yaml) 已按统一环境变量方式预置，通常只需要在 `.env` 里填：
 
 ```bash
-DEEPSEEK_API_KEY=your-key
+MTA_BASE_URL=https://api.deepseek.com/v1
+MY_API_KEY=your-key
 MTA_MODEL_DEFAULT=deepseek-chat
 ```
 
-如果你用内部部署的 Qwen / Kimi，改 [config/llm.yaml](/Users/wu/Documents/projects/model_test_agent/config/llm.yaml) 里的 `base_url / api_key / model` 即可。
+可选项：
+
+```bash
+# 不填时默认复用 MTA_MODEL_DEFAULT
+MTA_MODEL_CLASSIFIER=
+MTA_MODEL_DEBUGGER=
+
+# 留空则不启用 embedding / reranker
+EMBED_MODEL=
+RERANK_MODEL=
+```
+
+如果你用内部部署的 Qwen / Kimi，一般只需要改 `.env` 里的 `MTA_BASE_URL / MY_API_KEY / MTA_MODEL_DEFAULT`；分类和调试模型不单独填写时，会自动回落到默认模型。
 
 ### 3. 跑 demo
 

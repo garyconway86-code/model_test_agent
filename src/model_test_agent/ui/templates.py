@@ -380,6 +380,85 @@ def render_app(defaults: dict[str, str]) -> str:
     background: #fff7f7;
     color: var(--danger);
   }}
+  .health-panel {{
+    margin-bottom: 14px;
+    border: 1px solid rgba(23, 50, 77, 0.08);
+    border-radius: 14px;
+    background: #fbfdff;
+    padding: 12px 14px;
+  }}
+  .health-toolbar {{
+    display: flex;
+    justify-content: space-between;
+    align-items: center;
+    gap: 12px;
+    margin-bottom: 10px;
+  }}
+  .health-summary {{
+    font-size: 0.92rem;
+    color: var(--muted);
+  }}
+  .health-list {{
+    display: grid;
+    gap: 8px;
+  }}
+  .health-item {{
+    display: grid;
+    grid-template-columns: auto minmax(0, 1fr) auto;
+    gap: 10px;
+    align-items: start;
+    padding: 10px 12px;
+    border-radius: 12px;
+    background: #f6f9fc;
+  }}
+  .health-item.ok {{
+    border: 1px solid rgba(35, 117, 75, 0.14);
+  }}
+  .health-item.bad {{
+    border: 1px solid rgba(179, 58, 58, 0.14);
+  }}
+  .health-badge {{
+    display: inline-flex;
+    align-items: center;
+    justify-content: center;
+    min-width: 48px;
+    padding: 4px 8px;
+    border-radius: 999px;
+    font-size: 0.75rem;
+    font-weight: 700;
+  }}
+  .health-badge.ok {{
+    background: #ebf7ee;
+    color: #23754b;
+  }}
+  .health-badge.bad {{
+    background: #fff1f1;
+    color: var(--danger);
+  }}
+  .health-copy {{
+    min-width: 0;
+  }}
+  .health-copy strong {{
+    display: block;
+    margin-bottom: 2px;
+  }}
+  .health-copy .muted {{
+    overflow-wrap: anywhere;
+    word-break: break-word;
+  }}
+  .health-impact {{
+    margin-top: 6px;
+    font-size: 0.84rem;
+    line-height: 1.45;
+    color: #51606f;
+    overflow-wrap: anywhere;
+    word-break: break-word;
+  }}
+  .health-meta {{
+    font-size: 0.82rem;
+    color: var(--muted);
+    white-space: nowrap;
+  }}
   .viewer-shell {{
     margin-top: 16px;
     border: 1px solid var(--line);
@@ -654,6 +733,22 @@ def render_app(defaults: dict[str, str]) -> str:
               </div>
             </div>
 
+            <div class="health-panel">
+              <div class="health-toolbar">
+                <div>
+                  <strong>LLM 健康度</strong>
+                  <div class="health-summary" id="health-summary">正在检查...</div>
+                </div>
+                <button type="button" class="btn-secondary" id="health-refresh">刷新</button>
+              </div>
+              <div class="health-list" id="health-list">
+                <div class="meta-item">
+                  <strong>说明</strong>
+                  <div class="muted">这里会显示当前 LLM / Embedding / Reranker 接口的可用性、模型名和延迟。Embedding / Reranker 不可用时会自动降级，不会阻断主流程。</div>
+                </div>
+              </div>
+            </div>
+
             <div class="step-legend">
               <div class="legend-chip">
                 <span class="legend-mark llm">LLM</span>
@@ -724,6 +819,9 @@ def render_app(defaults: dict[str, str]) -> str:
   const jobStatusNode = document.getElementById("job-status");
   const jobDetailNode = document.getElementById("job-detail");
   const jobLogNode = document.getElementById("job-log");
+  const healthSummary = document.getElementById("health-summary");
+  const healthList = document.getElementById("health-list");
+  const healthRefreshButton = document.getElementById("health-refresh");
   const stepStrip = document.getElementById("step-strip");
   const viewerShell = document.getElementById("viewer-shell");
   const reportLink = document.getElementById("report-link");
@@ -867,6 +965,101 @@ def render_app(defaults: dict[str, str]) -> str:
       runButton.disabled = false;
       forceRunButton.disabled = false;
       runButton.textContent = "运行完整流程";
+    }}
+  }}
+
+  function renderHealth(payload) {{
+    if (!payload || payload.ok === false) {{
+      healthSummary.textContent = payload && payload.error ? `检查失败：${{payload.error}}` : "健康检查失败";
+      healthList.innerHTML = `
+        <div class="meta-item">
+          <strong>状态</strong>
+          <div class="muted">${{payload && payload.error ? escapeHtml(payload.error) : "无法获取健康状态"}}</div>
+        </div>
+      `;
+      return;
+    }}
+    const healthy = Number(payload.healthy || 0);
+    const total = Number(payload.total || 0);
+    healthSummary.textContent = total ? `${{healthy}} / ${{total}} 可用` : "未配置可检查的接口";
+    const profiles = Array.isArray(payload.profiles) ? payload.profiles : [];
+    if (!profiles.length) {{
+      healthList.innerHTML = `
+        <div class="meta-item">
+          <strong>状态</strong>
+          <div class="muted">当前没有已配置的 LLM / Embedding / Reranker profile。</div>
+        </div>
+      `;
+      return;
+    }}
+    healthList.innerHTML = profiles.map((item) => {{
+      const ok = Boolean(item.ok);
+      const badgeClass = ok ? "ok" : "bad";
+      const badgeText = ok ? "OK" : "FAIL";
+      const detail = item.error ? escapeHtml(item.error) : escapeHtml(item.model || "-");
+      const latency = item.latency_ms ? `${{item.latency_ms}} ms` : "-";
+      const impact = explainHealthImpact(item);
+      return `
+        <div class="health-item ${{badgeClass}}">
+          <span class="health-badge ${{badgeClass}}">${{badgeText}}</span>
+          <div class="health-copy">
+            <strong>${{escapeHtml(item.profile || "-")}} · ${{escapeHtml(item.kind || "chat")}}</strong>
+            <div class="muted">${{detail}}</div>
+            <div class="health-impact">${{escapeHtml(impact)}}</div>
+          </div>
+          <div class="health-meta">${{latency}}</div>
+        </div>
+      `;
+    }}).join("");
+  }}
+
+  function explainHealthImpact(item) {{
+    const kind = String(item && item.kind || "chat");
+    const profile = String(item && item.profile || "default");
+    const ok = Boolean(item && item.ok);
+    if (ok) {{
+      if (kind === "embedding") {{
+        return "影响：语义检索增强可用。系统措施：RAG 会优先使用 embedding 提升相似文档召回。";
+      }}
+      if (kind === "reranker") {{
+        return "影响：检索结果重排可用。系统措施：召回结果会进一步优化排序。";
+      }}
+      if (profile === "classifier") {{
+        return "影响：错误分类可正常执行。系统措施：分类节点直接使用该模型。";
+      }}
+      if (profile === "debugger") {{
+        return "影响：根因分析和自动修复可正常执行。系统措施：调试节点直接使用该模型。";
+      }}
+      return "影响：依赖该模型的节点可正常执行。系统措施：按当前配置直接调用。";
+    }}
+
+    if (kind === "embedding") {{
+      return "影响：语义检索增强暂不可用。系统措施：RAG 会自动退回本地词法检索，主流程仍可继续。";
+    }}
+    if (kind === "reranker") {{
+      return "影响：重排增强暂不可用。系统措施：跳过 reranker，保留原始检索结果顺序，主流程仍可继续。";
+    }}
+    if (profile === "classifier") {{
+      return "影响：错误分类会受影响。系统措施：主流程可继续，但分类结果与后续分析质量会下降。";
+    }}
+    if (profile === "debugger") {{
+      return "影响：根因分析和自动修复会受影响。系统措施：日志提取、源码定位和报告生成仍可执行，但调试结论会缺失。";
+    }}
+    return "影响：依赖该模型的节点会受影响。系统措施：未依赖该 profile 的部分仍可继续执行。";
+  }}
+
+  async function fetchHealthStatus() {{
+    healthRefreshButton.disabled = true;
+    const llmConfigPath = document.getElementById("llm_config_path").value.trim();
+    const suffix = llmConfigPath ? `?config_path=${{encodeURIComponent(llmConfigPath)}}` : "";
+    try {{
+      const response = await fetch(`/api/llm-health${{suffix}}`);
+      const payload = await response.json();
+      renderHealth(payload);
+    }} catch (_error) {{
+      renderHealth({{ ok: false, error: "无法连接健康检查接口" }});
+    }} finally {{
+      healthRefreshButton.disabled = false;
     }}
   }}
 
@@ -1119,11 +1312,13 @@ def render_app(defaults: dict[str, str]) -> str:
   document.getElementById("target_dir").addEventListener("blur", scheduleExistingReportLookup);
   document.getElementById("output_dir").addEventListener("change", scheduleExistingReportLookup);
   document.getElementById("output_dir").addEventListener("blur", scheduleExistingReportLookup);
+  healthRefreshButton.addEventListener("click", () => void fetchHealthStatus());
   form.addEventListener("submit", (event) => void startRun(event, false));
   forceRunButton.addEventListener("click", () => void startRun(null, true));
 
   setDefaults();
   renderSnapshot({{ status: "idle", detail: "等待输入", error: "" }});
+  void fetchHealthStatus();
   void lookupExistingReport();
   void fetchSnapshot();
 </script>

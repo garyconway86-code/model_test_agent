@@ -10,6 +10,7 @@ from pathlib import Path
 from typing import Any
 from urllib.parse import parse_qs, quote, unquote, urlsplit
 
+from model_test_agent.llm.client import check_all_profiles
 from model_test_agent.tools.report_paths import report_artifacts
 from model_test_agent.tools.report_server import load_review_state, review_state_path, save_review_state
 from model_test_agent.ui.job_runner import PipelineJobRunner
@@ -89,6 +90,9 @@ class _UIServerRequestHandler(BaseHTTPRequestHandler):
             return
         if request.path == "/api/job":
             self._write_json(HTTPStatus.OK, self._app.runner.latest().to_dict())
+            return
+        if request.path == "/api/llm-health":
+            self._handle_llm_health(request.query)
             return
         if request.path == "/api/report-lookup":
             self._handle_report_lookup(request.query)
@@ -199,6 +203,26 @@ class _UIServerRequestHandler(BaseHTTPRequestHandler):
         if exists:
             snapshot = self._app.runner.load_existing(target_dir, str(artifacts["html"]), str(artifacts["xlsx"]))
             payload.update(snapshot.to_dict())
+        self._write_json(HTTPStatus.OK, payload)
+
+    def _handle_llm_health(self, query: str) -> None:
+        params = parse_qs(query)
+        config_path = str(params.get("config_path", [""])[0] or "").strip()
+        try:
+            if config_path:
+                results = check_all_profiles(config_path=config_path, timeout=6)
+            else:
+                results = check_all_profiles(timeout=6)
+        except Exception as exc:
+            self._write_json(HTTPStatus.OK, {"ok": False, "error": str(exc), "profiles": []})
+            return
+        healthy = sum(1 for item in results if item.get("ok"))
+        payload = {
+            "ok": True,
+            "profiles": results,
+            "healthy": healthy,
+            "total": len(results),
+        }
         self._write_json(HTTPStatus.OK, payload)
 
     def _handle_get_file(self, query: str) -> None:

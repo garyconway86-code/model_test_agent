@@ -12,6 +12,7 @@ Usage::
 
 from __future__ import annotations
 
+from concurrent.futures import ThreadPoolExecutor
 import functools
 import json
 import urllib.request
@@ -33,9 +34,27 @@ _DEFAULT_CONFIG = Path(__file__).resolve().parents[3] / "config" / "llm.yaml"
 
 
 def _expand_env_vars(obj: Any) -> Any:
-    """Recursively expand ${VAR} placeholders in string values."""
+    """Recursively expand ${VAR} and ${VAR:-fallback} placeholders."""
     if isinstance(obj, str):
-        return re.sub(r"\$\{([^}]+)\}", lambda m: os.environ.get(m.group(1), m.group(0)), obj)
+        pattern = re.compile(r"\$\{([^${}:]+)(?::-([^{}]*))?\}")
+
+        def _replace(match: re.Match[str]) -> str:
+            key = match.group(1)
+            fallback = match.group(2)
+            value = os.environ.get(key)
+            if value not in {None, ""}:
+                return value
+            if fallback is not None:
+                return fallback
+            return match.group(0)
+
+        expanded = obj
+        for _ in range(5):
+            updated = pattern.sub(_replace, expanded)
+            if updated == expanded:
+                break
+            expanded = updated
+        return expanded
     if isinstance(obj, dict):
         return {k: _expand_env_vars(v) for k, v in obj.items()}
     if isinstance(obj, list):
@@ -62,6 +81,12 @@ def _infer_profile_kind(name: str, cfg: dict[str, Any]) -> str:
     if "embed" in name.lower():
         return "embedding"
     return "chat"
+
+
+def _profile_is_configured(cfg: dict[str, Any]) -> bool:
+    """Return whether a profile has the minimum required connection fields."""
+    required = ("base_url", "api_key", "model")
+    return all(str(cfg.get(key, "") or "").strip() for key in required)
 
 
 class LLMClient:
@@ -184,29 +209,39 @@ def check_all_profiles(
     Returns a list of status dicts (one per profile).
     """
     profiles = _load_profiles(config_path)
-    results = []
+    checks: list[tuple[str, dict[str, Any], str]] = []
     for name, cfg in profiles.items():
         kind = _infer_profile_kind(name, cfg)
+        if _profile_is_configured(cfg):
+            checks.append((name, cfg, kind))
+
+    def _run_one(name: str, cfg: dict[str, Any], kind: str) -> dict[str, Any]:
         try:
             if kind == "embedding":
-                results.append(_check_embedding_profile(name, cfg, timeout))
-            elif kind == "reranker":
-                results.append(_check_reranker_profile(name, cfg, timeout))
-            else:
-                client = LLMClient(profile=name, config_path=config_path)
-                result = client.health_check(timeout=timeout)
-                result["kind"] = "chat"
-                results.append(result)
+                return _check_embedding_profile(name, cfg, timeout)
+            if kind == "reranker":
+                return _check_reranker_profile(name, cfg, timeout)
+            client = LLMClient(profile=name, config_path=config_path)
+            result = client.health_check(timeout=timeout)
+            result["kind"] = "chat"
+            return result
         except Exception as exc:
-            results.append({
+            return {
                 "ok": False,
                 "profile": name,
                 "kind": kind,
                 "model": cfg.get("model", "?"),
                 "latency_ms": 0,
                 "error": str(exc),
-            })
-    return results
+            }
+
+    if not checks:
+        return []
+
+    max_workers = min(4, len(checks))
+    with ThreadPoolExecutor(max_workers=max_workers) as executor:
+        futures = [executor.submit(_run_one, name, cfg, kind) for name, cfg, kind in checks]
+        return [future.result() for future in futures]
 
 
 def _check_embedding_profile(name: str, cfg: dict[str, Any], timeout: int) -> dict[str, Any]:
