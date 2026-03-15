@@ -107,6 +107,9 @@ class _UIServerRequestHandler(BaseHTTPRequestHandler):
 
     def do_POST(self) -> None:  # noqa: N802
         request = urlsplit(self.path)
+        if request.path == "/api/job/skip":
+            self._handle_skip_job()
+            return
         if request.path != "/api/run":
             self.send_error(HTTPStatus.NOT_FOUND, "Not found")
             return
@@ -148,6 +151,16 @@ class _UIServerRequestHandler(BaseHTTPRequestHandler):
             )
             return
         self._write_json(HTTPStatus.ACCEPTED, snapshot.to_dict())
+
+    def _handle_skip_job(self) -> None:
+        payload = self._read_json_body() or {}
+        step_key = str(payload.get("step_key", "") or "").strip()
+        try:
+            snapshot = self._app.runner.request_skip(step_key=step_key)
+        except RuntimeError as exc:
+            self._write_json(HTTPStatus.CONFLICT, {"error": str(exc), "snapshot": self._app.runner.latest().to_dict()})
+            return
+        self._write_json(HTTPStatus.OK, snapshot.to_dict())
 
     def do_PUT(self) -> None:  # noqa: N802
         request = urlsplit(self.path)

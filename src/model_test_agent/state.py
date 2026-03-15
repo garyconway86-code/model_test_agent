@@ -9,7 +9,7 @@ from __future__ import annotations
 
 from dataclasses import dataclass, field
 from enum import Enum
-from typing import Any, TypedDict
+from typing import Any, Callable, TypedDict
 
 
 # ------------------------------------------------------------------
@@ -124,6 +124,8 @@ class AgentState(TypedDict, total=False):
     current_category: str
     retry_count: int
     max_retries: int
+    ui_progress_callback: Callable[[str, str], None]
+    ui_should_skip: Callable[[str], bool]
 
 
 # Convenience subsets for subgraphs that only need part of the state.
@@ -146,6 +148,8 @@ class DebugState(TypedDict, total=False):
     llm_config_path: str
     rag_dir: str
     docker_script_path: str
+    ui_progress_callback: Callable[[str, str], None]
+    ui_should_skip: Callable[[str], bool]
 
 
 class SNRState(TypedDict, total=False):

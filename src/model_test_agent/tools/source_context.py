@@ -36,7 +36,10 @@ class SourceContextResolver:
         settings = load_debug_settings()
         self.codebase_root = Path(codebase_root).resolve() if codebase_root else None
         self.context_lines = context_lines or settings.source_context.context_lines
+        self.docker_read_timeout = settings.source_context.docker_read_timeout_seconds
         self.docker_script_path = Path(docker_script_path).resolve() if docker_script_path else None
+        self._resolved_path_cache: dict[str, Path | None] = {}
+        self._local_context_cache: dict[tuple[str, int], str] = {}
 
     def extract_error_location(self, text: str) -> tuple[str, int]:
         """Return the best-effort `(file_path, line_num)` extracted from the log."""
@@ -68,6 +71,9 @@ class SourceContextResolver:
         return _SOURCE_NOT_FOUND
 
     def _read_local_context(self, resolved: Path, line_num: int) -> str:
+        cache_key = (str(resolved), line_num or 1)
+        if cache_key in self._local_context_cache:
+            return self._local_context_cache[cache_key]
         try:
             lines = resolved.read_text(encoding="utf-8", errors="replace").splitlines()
         except OSError:
@@ -83,7 +89,9 @@ class SourceContextResolver:
         for current in range(start, end + 1):
             marker = ">>" if current == line_num else "  "
             rendered.append(f"{marker} {current:>5} | {lines[current - 1]}")
-        return "\n".join(rendered)
+        context = "\n".join(rendered)
+        self._local_context_cache[cache_key] = context
+        return context
 
     def describe_codebase_root(self) -> str:
         """Return the active codebase root for UI display."""
@@ -104,16 +112,24 @@ class SourceContextResolver:
             f"awk 'NR>={start} && NR<={end} {{printf(\"%s %5d | %s\\n\", (NR=={target_line}?\">>\":\"  \"), NR, $0)}}' "
             f"{shlex.quote(file_path)}"
         )
-        result = DockerExecutor(docker_script_path=str(self.docker_script_path)).run(command)
+        result = DockerExecutor(
+            docker_script_path=str(self.docker_script_path),
+            timeout=self.docker_read_timeout,
+        ).run(command)
         if result.success and result.stdout.strip():
             return result.stdout.strip()
         return ""
 
     def _resolve_source_path(self, file_path: str) -> Path | None:
+        if file_path in self._resolved_path_cache:
+            return self._resolved_path_cache[file_path]
         raw = Path(file_path)
         for candidate in self._candidate_paths(raw):
             if candidate.exists() and candidate.is_file():
-                return candidate.resolve()
+                resolved = candidate.resolve()
+                self._resolved_path_cache[file_path] = resolved
+                return resolved
+        self._resolved_path_cache[file_path] = None
         return None
 
     def _candidate_paths(self, raw: Path) -> list[Path]:

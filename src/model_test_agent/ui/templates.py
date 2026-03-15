@@ -731,6 +731,15 @@ def render_app(defaults: dict[str, str]) -> str:
                 <div class="label">当前信息</div>
                 <div class="value" id="job-detail">等待输入</div>
               </div>
+              <div class="mini-card">
+                <div class="label">本步耗时</div>
+                <div class="value" id="job-elapsed">-</div>
+              </div>
+            </div>
+
+            <div class="editor-actions" style="margin-bottom: 14px;">
+              <button type="button" class="btn-secondary" id="skip-step-button" hidden>跳过当前步骤</button>
+              <small id="skip-step-hint">源码定位和根因分析耗时较长时，可请求跳过当前步骤。</small>
             </div>
 
             <div class="health-panel">
@@ -818,7 +827,10 @@ def render_app(defaults: dict[str, str]) -> str:
   const jobIdNode = document.getElementById("job-id");
   const jobStatusNode = document.getElementById("job-status");
   const jobDetailNode = document.getElementById("job-detail");
+  const jobElapsedNode = document.getElementById("job-elapsed");
   const jobLogNode = document.getElementById("job-log");
+  const skipStepButton = document.getElementById("skip-step-button");
+  const skipStepHint = document.getElementById("skip-step-hint");
   const healthSummary = document.getElementById("health-summary");
   const healthList = document.getElementById("health-list");
   const healthRefreshButton = document.getElementById("health-refresh");
@@ -862,6 +874,18 @@ def render_app(defaults: dict[str, str]) -> str:
   let pollTimer = null;
   let lookupTimer = null;
   let currentSnapshot = {{ status: "idle" }};
+
+  function supportsSkip(stepKey) {{
+    return stepKey === "source_context" || stepKey === "debug";
+  }}
+
+  function formatElapsed(seconds) {{
+    const total = Math.max(0, Number(seconds || 0));
+    if (!total) return "-";
+    const mins = Math.floor(total / 60);
+    const secs = total % 60;
+    return mins ? `${{mins}}m ${{secs}}s` : `${{secs}}s`;
+  }}
 
   function setDefaults() {{
     Object.entries(defaults).forEach(([key, value]) => {{
@@ -941,6 +965,7 @@ def render_app(defaults: dict[str, str]) -> str:
     jobIdNode.textContent = String(snapshot.pid || appPid || "-");
     jobStatusNode.textContent = snapshot.status || "idle";
     jobDetailNode.textContent = snapshot.detail || "等待输入";
+    jobElapsedNode.textContent = formatElapsed(snapshot.step_elapsed_seconds || 0);
     jobLogNode.classList.toggle("error", snapshot.status === "failed");
     const lines = Array.isArray(snapshot.messages) && snapshot.messages.length
       ? snapshot.messages
@@ -961,10 +986,23 @@ def render_app(defaults: dict[str, str]) -> str:
       runButton.disabled = true;
       forceRunButton.disabled = true;
       runButton.textContent = "运行中...";
+      const skipSupported = supportsSkip(snapshot.step_key);
+      skipStepButton.hidden = !skipSupported;
+      skipStepButton.disabled = Boolean(snapshot.skip_requested);
+      skipStepButton.textContent = snapshot.skip_requested ? "已请求跳过" : "跳过当前步骤";
+      skipStepHint.textContent = skipSupported
+        ? (snapshot.step_key === "source_context"
+            ? "源码定位支持逐条跳过；若当前正在读取 Docker 内源码，会在当前读取结束后生效。"
+            : "根因分析会在当前类别分析结束后跳过剩余类别。")
+        : "源码定位和根因分析耗时较长时，可请求跳过当前步骤。";
     }} else {{
       runButton.disabled = false;
       forceRunButton.disabled = false;
       runButton.textContent = "运行完整流程";
+      skipStepButton.hidden = true;
+      skipStepButton.disabled = false;
+      skipStepButton.textContent = "跳过当前步骤";
+      skipStepHint.textContent = "源码定位和根因分析耗时较长时，可请求跳过当前步骤。";
     }}
   }}
 
@@ -1079,6 +1117,27 @@ def render_app(defaults: dict[str, str]) -> str:
     pollTimer = window.setTimeout(() => {{
       void fetchSnapshot();
     }}, 1000);
+  }}
+
+  async function requestSkipCurrentStep() {{
+    if (!currentSnapshot || !supportsSkip(currentSnapshot.step_key) || currentSnapshot.status !== "running") {{
+      return;
+    }}
+    skipStepButton.disabled = true;
+    const response = await fetch("/api/job/skip", {{
+      method: "POST",
+      headers: {{ "Content-Type": "application/json" }},
+      body: JSON.stringify({{ step_key: currentSnapshot.step_key }}),
+    }});
+    const result = await response.json();
+    if (result.snapshot) {{
+      renderSnapshot(result.snapshot);
+    }} else {{
+      renderSnapshot(result);
+    }}
+    if (currentSnapshot.status === "running") {{
+      schedulePoll();
+    }}
   }}
 
   async function lookupExistingReport() {{
@@ -1313,6 +1372,7 @@ def render_app(defaults: dict[str, str]) -> str:
   document.getElementById("output_dir").addEventListener("change", scheduleExistingReportLookup);
   document.getElementById("output_dir").addEventListener("blur", scheduleExistingReportLookup);
   healthRefreshButton.addEventListener("click", () => void fetchHealthStatus());
+  skipStepButton.addEventListener("click", () => void requestSkipCurrentStep());
   form.addEventListener("submit", (event) => void startRun(event, false));
   forceRunButton.addEventListener("click", () => void startRun(null, true));
 

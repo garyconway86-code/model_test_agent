@@ -20,6 +20,11 @@ _DEFAULT_KEYWORDS_CFG = Path(__file__).resolve().parents[3] / "config" / "error_
 
 # Fallback generic keywords when no config is available.
 _FALLBACK_KEYWORDS = ["error", "Error", "ERROR", "exception", "Traceback", "FAILED"]
+_CHAIN_SPLIT_PATTERNS = [
+    re.compile(r"during handling of the above exception, another exception occurred", re.IGNORECASE),
+    re.compile(r"the above exception was the direct cause of the following exception", re.IGNORECASE),
+    re.compile(r"\bcaused by:\b", re.IGNORECASE),
+]
 
 
 @dataclass
@@ -36,6 +41,7 @@ class LogExtractor:
 
     keywords_config: Path | str = _DEFAULT_KEYWORDS_CFG
     context_lines: int = 3
+    max_segment_context_lines: int = 24
 
     # Loaded at first use.
     _categories: dict[str, dict[str, Any]] = field(default_factory=dict, init=False, repr=False)
@@ -69,30 +75,37 @@ class LogExtractor:
         if not model_name:
             model_name = path.stem
 
-        entries: list[ErrorEntry] = []
-        visited: set[int] = set()
-
+        candidates: list[dict[str, Any]] = []
         for idx, line in enumerate(lines):
-            if idx in visited:
-                continue
             match = self._match_line(line)
             if match is None:
                 continue
-
             category, keyword = match
-            ctx_start = max(0, idx - self.context_lines)
-            ctx_end = min(len(lines), idx + self.context_lines + 1)
-            context = "\n".join(lines[ctx_start:ctx_end])
-            visited.update(range(ctx_start, ctx_end))
+            candidates.append({
+                "idx": idx,
+                "line": line.rstrip(),
+                "category": category,
+                "keyword": keyword,
+            })
 
+        if not candidates:
+            return []
+
+        entries: list[ErrorEntry] = []
+        for segment in self._group_candidates(candidates, lines):
+            primary = max(segment, key=self._candidate_score)
+            seg_start = segment[0]["idx"]
+            seg_end = segment[-1]["idx"]
+            ctx_start, ctx_end = self._context_bounds(seg_start, seg_end, primary["idx"], len(lines))
+            context = "\n".join(lines[ctx_start:ctx_end])
             entries.append(ErrorEntry(
                 model_name=model_name,
-                line_number=idx + 1,
-                message=line.strip(),
+                line_number=primary["idx"] + 1,
+                message=primary["line"].strip(),
                 log_path=str(path.resolve()),
                 raw_context=context,
-                category=category,
-                matched_keyword=keyword,
+                category=primary["category"],
+                matched_keyword=primary["keyword"],
             ))
 
         return entries
@@ -140,7 +153,50 @@ class LogExtractor:
                         best = (priority, cat_name, f"regex:{pat}")
                     break
 
-        return (best[1], best[2]) if best else None
+        if best:
+            return best[1], best[2]
+        if re.search(r"\b(?:\w+(?:Error|Exception)):", line):
+            return "unknown", "exception_type"
+        return None
+
+    def _group_candidates(self, candidates: list[dict[str, Any]], lines: list[str]) -> list[list[dict[str, Any]]]:
+        split_indexes = {
+            idx
+            for idx, line in enumerate(lines)
+            if any(pattern.search(line) for pattern in _CHAIN_SPLIT_PATTERNS)
+        }
+        if not split_indexes:
+            return [candidates]
+
+        groups: list[list[dict[str, Any]]] = []
+        current: list[dict[str, Any]] = []
+        for candidate in candidates:
+            if current and any(split_idx < candidate["idx"] and split_idx >= current[-1]["idx"] for split_idx in split_indexes):
+                groups.append(current)
+                current = []
+            current.append(candidate)
+        if current:
+            groups.append(current)
+        return groups or [candidates]
+
+    def _context_bounds(self, seg_start: int, seg_end: int, primary_idx: int, total_lines: int) -> tuple[int, int]:
+        window_start = max(seg_start, primary_idx - self.context_lines)
+        window_end = min(seg_end, primary_idx + self.context_lines)
+        span = window_end - window_start + 1
+        if span < self.max_segment_context_lines and seg_end - seg_start + 1 <= self.max_segment_context_lines:
+            window_start = max(0, seg_start - self.context_lines)
+            window_end = min(total_lines - 1, seg_end + self.context_lines)
+        return window_start, window_end + 1
+
+    @staticmethod
+    def _candidate_score(candidate: dict[str, Any]) -> tuple[int, int, int]:
+        line = str(candidate.get("line", ""))
+        signal = 0
+        if re.search(r"\b(traceback|exception|fatal|failed|error)\b", line, re.IGNORECASE):
+            signal += 5
+        if re.search(r"\b(mismatch|unsupported|out of memory|filenotfound|no such file|cannot|failed)\b", line, re.IGNORECASE):
+            signal += 3
+        return (signal, candidate["idx"], len(line))
 
     @staticmethod
     def _keyword_matches(line: str, keyword: str) -> bool:

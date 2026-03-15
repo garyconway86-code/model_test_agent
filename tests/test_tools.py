@@ -37,7 +37,7 @@ class TestLogExtractor:
         extractor = LogExtractor(context_lines=1)
         entries = extractor.extract_from_file(log, model_name="test_model")
 
-        assert len(entries) >= 1
+        assert len(entries) == 1
         assert entries[0].model_name == "test_model"
         assert entries[0].category == "shape_mismatch"
 
@@ -85,7 +85,7 @@ class TestLogExtractor:
         extractor = LogExtractor()
         assert extractor.extract_from_file("/nonexistent/path.log") == []
 
-    def test_multiple_categories(self, tmp_path: Path) -> None:
+    def test_multiple_error_lines_are_collapsed_into_one_entry(self, tmp_path: Path) -> None:
         log = tmp_path / "multi.log"
         log.write_text(
             "[ERROR] Shape mismatch at layer 1\n"
@@ -97,10 +97,29 @@ class TestLogExtractor:
         extractor = LogExtractor(context_lines=0)
         entries = extractor.extract_from_file(log)
 
-        categories = {e.category for e in entries}
-        assert "shape_mismatch" in categories
-        assert "memory_error" in categories
-        assert "io_error" in categories
+        assert len(entries) == 1
+        assert entries[0].category in {"shape_mismatch", "memory_error", "io_error"}
+
+    def test_chained_exceptions_are_split_into_multiple_entries(self, tmp_path: Path) -> None:
+        log = tmp_path / "chain.log"
+        log.write_text(
+            "Traceback (most recent call last):\n"
+            "  File \"/tmp/demo.py\", line 1, in <module>\n"
+            "    raise ValueError('bad input')\n"
+            "ValueError: bad input\n"
+            "\n"
+            "During handling of the above exception, another exception occurred:\n"
+            "\n"
+            "RuntimeError: fallback execution failed\n",
+            encoding="utf-8",
+        )
+
+        extractor = LogExtractor(context_lines=1)
+        entries = extractor.extract_from_file(log)
+
+        assert len(entries) == 2
+        assert "ValueError" in entries[0].message or "Traceback" in entries[0].message
+        assert "RuntimeError" in entries[1].message
 
 
 # ------------------------------------------------------------------

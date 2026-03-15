@@ -69,3 +69,20 @@ class TestPipelineJobRunner:
 
         assert current.status == "failed"
         assert current.error == "boom"
+
+    def test_request_skip_marks_running_job(self, monkeypatch) -> None:
+        def _slow_run(initial_state, on_event=None):
+            if on_event:
+                on_event(PipelineEvent("start", "source_context", 2, 6, dict(initial_state)))
+            time.sleep(0.2)
+            return {}
+
+        monkeypatch.setattr("model_test_agent.ui.job_runner.run_main_pipeline", _slow_run)
+        runner = PipelineJobRunner()
+        snapshot = runner.start({"target_dir": "/tmp/models"})
+        time.sleep(0.05)
+
+        updated = runner.request_skip("source_context")
+
+        assert updated.skip_requested is True
+        assert any("SKIP source_context" in message for message in updated.messages)

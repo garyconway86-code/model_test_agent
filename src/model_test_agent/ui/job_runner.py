@@ -6,6 +6,7 @@ from dataclasses import asdict, dataclass, field
 import os
 from pathlib import Path
 from threading import Lock, Thread
+import time
 from typing import Any, Callable
 from uuid import uuid4
 
@@ -29,9 +30,16 @@ class JobSnapshot:
     target_dir: str = ""
     pid: int = 0
     messages: list[str] = field(default_factory=list)
+    started_at: float = 0.0
+    step_started_at: float = 0.0
+    step_elapsed_seconds: int = 0
+    skip_requested: bool = False
 
     def to_dict(self) -> dict[str, Any]:
-        return asdict(self)
+        data = asdict(self)
+        if self.step_started_at:
+            data["step_elapsed_seconds"] = max(0, int(time.time() - self.step_started_at))
+        return data
 
 
 class PipelineJobRunner:
@@ -43,6 +51,7 @@ class PipelineJobRunner:
         self._latest_job_id = ""
         self._active_job_id = ""
         self._report_url_builder = report_url_builder or (lambda _job_id, _report_path: "")
+        self._skip_requests: dict[str, set[str]] = {}
 
     def latest(self) -> JobSnapshot:
         with self._lock:
@@ -72,10 +81,12 @@ class PipelineJobRunner:
                 target_dir=str(config.get("target_dir", "") or ""),
                 pid=os.getpid(),
                 messages=["Queued pipeline run"],
+                started_at=time.time(),
             )
             self._jobs[job_id] = snapshot
             self._latest_job_id = job_id
             self._active_job_id = job_id
+            self._skip_requests[job_id] = set()
 
         thread = Thread(target=self._run_job, args=(job_id, dict(config)), daemon=True)
         thread.start()
@@ -98,12 +109,34 @@ class PipelineJobRunner:
                 target_dir=target_dir,
                 pid=os.getpid(),
                 messages=["Loaded existing report"],
+                started_at=time.time(),
             )
             self._jobs[job_id] = snapshot
             self._latest_job_id = job_id
             return JobSnapshot(**snapshot.to_dict())
 
+    def request_skip(self, step_key: str = "") -> JobSnapshot:
+        with self._lock:
+            if not self._active_job_id:
+                raise RuntimeError("No pipeline job is running")
+            snapshot = self._jobs[self._active_job_id]
+            if snapshot.status != "running":
+                raise RuntimeError("No pipeline job is running")
+            current_step = snapshot.step_key or ""
+            target_step = step_key or current_step
+            if target_step not in {"source_context", "debug"}:
+                raise RuntimeError("Current step does not support skip")
+            if current_step and target_step != current_step:
+                raise RuntimeError(f"Current step is {current_step}, cannot skip {target_step}")
+            self._skip_requests.setdefault(self._active_job_id, set()).add(target_step)
+            snapshot.skip_requested = True
+            self._append_message(snapshot, f"SKIP {target_step}: 用户请求跳过，当前项完成后生效")
+            return JobSnapshot(**snapshot.to_dict())
+
     def _run_job(self, job_id: str, config: dict[str, Any]) -> None:
+        config["ui_progress_callback"] = lambda step_key, detail: self._update_progress(job_id, step_key, detail)
+        config["ui_should_skip"] = lambda step_key: self._should_skip(job_id, step_key)
+
         def _on_event(event: PipelineEvent) -> None:
             with self._lock:
                 snapshot = self._jobs[job_id]
@@ -112,6 +145,9 @@ class PipelineJobRunner:
                 snapshot.step_index = event.step_index
                 snapshot.total_steps = event.total_steps
                 snapshot.detail = self._event_detail(event)
+                if event.phase == "start":
+                    snapshot.step_started_at = time.time()
+                    snapshot.skip_requested = False
                 self._append_message(snapshot, self._event_message(event))
                 if event.phase == "error":
                     snapshot.error = event.error
@@ -126,6 +162,7 @@ class PipelineJobRunner:
                 snapshot.detail = f"{exc.step_key} failed"
                 self._append_message(snapshot, f"ERROR {exc.step_key}: {exc.original_error}")
                 self._active_job_id = ""
+                self._skip_requests.pop(job_id, None)
             return
         except Exception as exc:  # pragma: no cover - defensive fallback for UI threads
             with self._lock:
@@ -135,6 +172,7 @@ class PipelineJobRunner:
                 snapshot.detail = "pipeline failed"
                 self._append_message(snapshot, f"ERROR pipeline: {exc}")
                 self._active_job_id = ""
+                self._skip_requests.pop(job_id, None)
             return
 
         report_html_path = str(result.get("report_html_path", "") or "")
@@ -152,6 +190,20 @@ class PipelineJobRunner:
             )
             self._append_message(snapshot, snapshot.detail)
             self._active_job_id = ""
+            self._skip_requests.pop(job_id, None)
+
+    def _update_progress(self, job_id: str, step_key: str, detail: str) -> None:
+        with self._lock:
+            snapshot = self._jobs.get(job_id)
+            if not snapshot or snapshot.status != "running":
+                return
+            snapshot.step_key = step_key
+            snapshot.detail = detail
+            self._append_message(snapshot, f"INFO {step_key}: {detail}")
+
+    def _should_skip(self, job_id: str, step_key: str) -> bool:
+        with self._lock:
+            return step_key in self._skip_requests.get(job_id, set())
 
     @staticmethod
     def _append_message(snapshot: JobSnapshot, message: str) -> None:

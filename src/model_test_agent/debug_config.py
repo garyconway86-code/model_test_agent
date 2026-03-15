@@ -18,6 +18,7 @@ _DEFAULT_DEBUG_CFG = Path(__file__).resolve().parents[2] / "config" / "debug.yam
 @dataclass(frozen=True)
 class SourceContextSettings:
     context_lines: int = 15
+    docker_read_timeout_seconds: int = 20
 
 
 @dataclass(frozen=True)
@@ -68,6 +69,7 @@ def _load_debug_settings_cached(path: str) -> DebugSettings:
     return DebugSettings(
         source_context=SourceContextSettings(
             context_lines=_as_positive_int(source.get("context_lines"), 15),
+            docker_read_timeout_seconds=_as_positive_int(source.get("docker_read_timeout_seconds"), 20),
         ),
         prompt_budget=PromptBudgetSettings(
             max_error_samples=_as_positive_int(prompt.get("max_error_samples"), 5),

@@ -76,16 +76,46 @@ def _enrich_source_context(state: AgentState) -> dict[str, Any]:
         codebase_root=state.get("codebase_root", ""),
         docker_script_path=state.get("docker_script_path", ""),
     )
-    for err in errors:
+    progress_callback = state.get("ui_progress_callback")
+    should_skip = state.get("ui_should_skip")
+    skipped = False
+    for index, err in enumerate(errors, start=1):
+        if _skip_requested(should_skip, "source_context"):
+            skipped = True
+            progress_callback and progress_callback(
+                "source_context",
+                f"已跳过剩余源码定位（已处理 {index - 1}/{len(errors)}）",
+            )
+            break
+        if callable(progress_callback):
+            progress_callback(
+                "source_context",
+                f"正在定位源码 {index}/{len(errors)} · {err.model_name}",
+            )
         file_path, line_num = resolver.extract_error_location(err.raw_context or err.message)
         err.error_file_path = file_path
         err.error_line_num = line_num
         err.source_code_context = resolver.retrieve_code_context(file_path, line_num)
+    if skipped:
+        for err in errors:
+            if not err.source_code_context:
+                err.source_code_context = "源码定位已跳过，请仅根据日志与 RAG 推理"
 
     source_info = dict(state.get("source_info") or {})
     if source_info:
         source_info["codebase_root"] = resolver.describe_codebase_root()
+        if skipped:
+            source_info["source_context_status"] = "skipped"
     return {"errors": errors, "source_info": source_info}
+
+
+def _skip_requested(callback: Any, step_key: str) -> bool:
+    if not callable(callback):
+        return False
+    try:
+        return bool(callback(step_key))
+    except Exception:
+        return False
 
 
 def _save_history(state: AgentState) -> dict[str, Any]:

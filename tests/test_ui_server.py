@@ -35,6 +35,8 @@ class TestUIServer:
             assert "RAG 会自动退回本地词法检索" in content
             assert "跳过 reranker，保留原始检索结果顺序，主流程仍可继续" in content
             assert 'id="job-log"' in content
+            assert "本步耗时" in content
+            assert "跳过当前步骤" in content
         finally:
             server_info.server.shutdown()
             server_info.server.server_close()
@@ -246,6 +248,37 @@ class TestUIServer:
             payload = json.loads(urlopen(request).read().decode("utf-8"))
             assert payload["job_id"] == "force123"
             assert payload["status"] == "running"
+        finally:
+            server_info.server.shutdown()
+            server_info.server.server_close()
+            thread.join(timeout=2)
+
+    def test_skip_job_api_delegates_to_runner(self) -> None:
+        server_info = create_ui_server(port=0)
+        thread = threading.Thread(target=server_info.server.serve_forever, daemon=True)
+        thread.start()
+        try:
+            server_info.server.RequestHandlerClass._app.runner.request_skip = lambda step_key="": type(
+                "Snapshot",
+                (),
+                {
+                    "to_dict": lambda self: {
+                        "job_id": "demo1234",
+                        "status": "running",
+                        "step_key": step_key,
+                        "skip_requested": True,
+                    }
+                },
+            )()
+            request = Request(
+                f"{server_info.base_url}/api/job/skip",
+                data=json.dumps({"step_key": "debug"}).encode("utf-8"),
+                method="POST",
+                headers={"Content-Type": "application/json"},
+            )
+            payload = json.loads(urlopen(request).read().decode("utf-8"))
+            assert payload["step_key"] == "debug"
+            assert payload["skip_requested"] is True
         finally:
             server_info.server.shutdown()
             server_info.server.server_close()

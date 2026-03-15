@@ -29,6 +29,8 @@ def _analyze(state: DebugState) -> dict[str, Any]:
     llm_config_path = state.get("llm_config_path")
     rag_dir = state.get("rag_dir", "")
     existing_results = {result.error_category: result for result in state.get("debug_results", [])}
+    progress_callback = state.get("ui_progress_callback")
+    should_skip = state.get("ui_should_skip")
 
     pending_groups = {
         category: errors
@@ -44,22 +46,53 @@ def _analyze(state: DebugState) -> dict[str, Any]:
     retrieval_top_k = load_debug_settings().retrieval.top_k
     skill = DebugAnalyzerSkill(llm_config_path=llm_config_path)
     retriever = SemanticRetriever(config_path=llm_config_path, knowledge_dir=rag_dir)
+    if not callable(progress_callback) and not callable(should_skip):
+        history_per_category = {
+            category: retriever.find_similar(
+                category,
+                key_log=errors[0].message if errors else "",
+                top_k=retrieval_top_k,
+            )
+            for category, errors in pending_groups.items()
+        }
+        refreshed_results = skill.run(
+            error_groups=pending_groups,
+            models=models,
+            history_per_category=history_per_category,
+        )
+        results = [
+            existing_results[category]
+            for category in error_groups
+            if category in existing_results and category not in pending_groups
+        ]
+        refreshed_map = {result.error_category: result for result in refreshed_results}
+        for category in error_groups:
+            if category in refreshed_map:
+                results.append(refreshed_map[category])
+        return {"debug_results": results}
 
-    # Retrieve relevant history per category before calling the LLM.
-    history_per_category = {
-        category: retriever.find_similar(
+    refreshed_results: list[DebugResult] = []
+    pending_items = list(pending_groups.items())
+    for index, (category, errors) in enumerate(pending_items, start=1):
+        if _skip_requested(should_skip, "debug"):
+            refreshed_results.extend(_skipped_results(pending_items[index - 1 :]))
+            if callable(progress_callback):
+                progress_callback("debug", f"已跳过剩余调试分析（已完成 {index - 1}/{len(pending_items)} 个类别）")
+            break
+        if callable(progress_callback):
+            progress_callback("debug", f"正在分析 {index}/{len(pending_items)} · {category}")
+        history_for_category = retriever.find_similar(
             category,
             key_log=errors[0].message if errors else "",
             top_k=retrieval_top_k,
         )
-        for category, errors in pending_groups.items()
-    }
-
-    refreshed_results = skill.run(
-        error_groups=pending_groups,
-        models=models,
-        history_per_category=history_per_category,
-    )
+        refreshed_results.extend(
+            skill.run(
+                error_groups={category: errors},
+                models=models,
+                history_per_category={category: history_for_category},
+            )
+        )
     results = [
         existing_results[category]
         for category in error_groups
@@ -70,6 +103,29 @@ def _analyze(state: DebugState) -> dict[str, Any]:
         if category in refreshed_map:
             results.append(refreshed_map[category])
     return {"debug_results": results}
+
+
+def _skip_requested(callback: Any, step_key: str) -> bool:
+    if not callable(callback):
+        return False
+    try:
+        return bool(callback(step_key))
+    except Exception:
+        return False
+
+
+def _skipped_results(pending_items: list[tuple[str, list[Any]]]) -> list[DebugResult]:
+    skipped: list[DebugResult] = []
+    for category, errors in pending_items:
+        skipped.append(DebugResult(
+            error_category=category,
+            affected_models=sorted({error.model_name for error in errors}),
+            root_cause="调试分析已跳过",
+            suggested_fix="",
+            fix_command="",
+            fix_status=FixStatus.SKIPPED,
+        ))
+    return skipped
 
 
 def _execute_fix(state: DebugState) -> dict[str, Any]:

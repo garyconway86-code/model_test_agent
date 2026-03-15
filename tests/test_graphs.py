@@ -330,3 +330,94 @@ class TestGraphConstruction:
         assert result["errors"][0].error_line_num == 42
         assert "return fail" in result["errors"][0].source_code_context
         assert result["source_info"]["codebase_root"] == "/repo"
+
+    def test_enrich_source_context_can_skip_remaining_errors(self, monkeypatch) -> None:
+        class DummyResolver:
+            def __init__(self, codebase_root="", context_lines=15, docker_script_path=""):
+                pass
+
+            def extract_error_location(self, text):
+                return ("src/demo.cpp", 42)
+
+            def retrieve_code_context(self, file_path, line_num):
+                return ">>    42 | return fail;"
+
+            def describe_codebase_root(self):
+                return "/repo"
+
+        monkeypatch.setattr("model_test_agent.graphs.main_graph.SourceContextResolver", DummyResolver)
+
+        seen = {"count": 0}
+
+        def _should_skip(step_key: str) -> bool:
+            return step_key == "source_context" and seen["count"] > 0
+
+        def _progress(step_key: str, detail: str) -> None:
+            if step_key == "source_context" and "正在定位源码" in detail:
+                seen["count"] += 1
+
+        errors = [
+            ErrorEntry(model_name="m1", line_number=5, message="shape mismatch", raw_context="shape mismatch"),
+            ErrorEntry(model_name="m2", line_number=6, message="other mismatch", raw_context="other mismatch"),
+        ]
+
+        result = _enrich_source_context({
+            "errors": errors,
+            "source_info": {"target_dir": "/tmp/models"},
+            "ui_should_skip": _should_skip,
+            "ui_progress_callback": _progress,
+        })
+
+        assert result["errors"][0].source_code_context == ">>    42 | return fail;"
+        assert result["errors"][1].source_code_context == "源码定位已跳过，请仅根据日志与 RAG 推理"
+        assert result["source_info"]["source_context_status"] == "skipped"
+
+    def test_debug_subgraph_can_skip_remaining_categories(self, monkeypatch) -> None:
+        analyzed = []
+
+        class DummyRetriever:
+            def __init__(self, config_path=None, knowledge_dir=None):
+                pass
+
+            def find_similar(self, category, key_log="", top_k=3):
+                return []
+
+        class DummySkill:
+            def __init__(self, llm_config_path=None):
+                pass
+
+            def run(self, error_groups, models=None, history_per_category=None):
+                category = next(iter(error_groups))
+                analyzed.append(category)
+                return [DebugResult(error_category=category, root_cause=f"done:{category}")]
+
+        monkeypatch.setattr("model_test_agent.graphs.debug_subgraph.SemanticRetriever", DummyRetriever)
+        monkeypatch.setattr("model_test_agent.graphs.debug_subgraph.DebugAnalyzerSkill", DummySkill)
+
+        counter = {"seen": 0}
+
+        def _progress(step_key: str, detail: str) -> None:
+            if step_key == "debug" and "正在分析" in detail:
+                counter["seen"] += 1
+
+        def _should_skip(step_key: str) -> bool:
+            return step_key == "debug" and counter["seen"] >= 1
+
+        graph = build_debug_subgraph().compile()
+        result = graph.invoke({
+            "error_groups": {
+                "cat_a": [ErrorEntry(model_name="m1", line_number=1, message="a")],
+                "cat_b": [ErrorEntry(model_name="m2", line_number=2, message="b")],
+            },
+            "models": [],
+            "debug_results": [],
+            "auto_fix": False,
+            "ui_progress_callback": _progress,
+            "ui_should_skip": _should_skip,
+        })
+
+        result_map = {item.error_category: item for item in result["debug_results"]}
+        assert analyzed == ["cat_a"]
+        assert result_map["cat_a"].root_cause == "done:cat_a"
+        assert result_map["cat_b"].fix_status == FixStatus.SKIPPED
+        assert result_map["cat_b"].root_cause == "调试分析已跳过"
