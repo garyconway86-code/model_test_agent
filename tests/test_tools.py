@@ -335,6 +335,7 @@ class TestReportGenerator:
             source_info={
                 "target_dir": "/demo/Models_35",
                 "discovery_rule": "1st-level subdirs => models",
+                "source_tree": "target-dir/\n  01-1_model/\n    model_config.yaml",
             },
         )
         assert path.exists()
@@ -350,6 +351,7 @@ class TestReportGenerator:
         assert "Agent Assist" in content
         assert "Target Layout" in content
         assert "/demo/Models_35" in content
+        assert "model_config.yaml" in content
         assert "deepseek-chat" in content
         assert "demo-kit | v1.2.3" in content
 

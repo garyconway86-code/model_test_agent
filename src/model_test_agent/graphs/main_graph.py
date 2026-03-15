@@ -167,6 +167,13 @@ def _report(state: AgentState) -> dict[str, Any]:
     source_info = {
         "target_dir": state.get("target_dir") or "-",
         "discovery_rule": "1st-level subdirs => models; read model_config/config, package_info.json, and *.log",
+        "source_tree": (
+            "target-dir/\n"
+            "  01-1_model/\n"
+            "    model_config.yaml\n"
+            "    package_info.json\n"
+            "    runs/.../convert.log"
+        ),
     }
 
     gen = ReportGenerator(output_dir=state.get("output_dir", "."))

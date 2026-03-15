@@ -208,6 +208,7 @@ class ReportGenerator:
             assisted_fields=html.escape(agent_info.get("assisted_fields", "")),
             target_dir=html.escape(source_info.get("target_dir", "-")),
             discovery_rule=html.escape(source_info.get("discovery_rule", "")),
+            source_tree=html.escape(source_info.get("source_tree", "")),
             timestamp=datetime.now().strftime("%Y-%m-%d %H:%M:%S"),
             visible_rows=len(rows),
         )
@@ -424,6 +425,17 @@ _HTML_TEMPLATE = """\
     font-size: 0.92em;
     line-height: 1.6;
     color: #425466;
+  }}
+  .source-tree {{
+    margin-top: 10px;
+    padding: 12px;
+    border-radius: 8px;
+    background: #f6f8fb;
+    color: #304050;
+    font-size: 0.86em;
+    line-height: 1.55;
+    white-space: pre-wrap;
+    font-family: ui-monospace, SFMono-Regular, Menlo, monospace;
   }}
   .agent-lines strong {{
     color: var(--primary);
@@ -801,6 +813,7 @@ _HTML_TEMPLATE = """\
         <div><strong>Target Dir</strong>: {target_dir}</div>
         <div><strong>Discovery</strong>: {discovery_rule}</div>
       </div>
+      <div class="source-tree">{source_tree}</div>
     </div>
     <div class="summary-card">
       <h3>Errors by Category</h3>
