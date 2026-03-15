@@ -3,18 +3,24 @@
 from __future__ import annotations
 
 import json
+import os
+from pathlib import Path
+
+
+_DEFAULT_HISTORY_PATH = Path(__file__).resolve().parents[3] / "history" / "cases.json"
 
 
 def render_app(defaults: dict[str, str]) -> str:
     """Return the single-page UI used to launch and monitor runs."""
     defaults_json = json.dumps(defaults, ensure_ascii=False)
-    llm_source = defaults.get("llm_config_path") or "config/llm.yaml"
+    history_path = str(_DEFAULT_HISTORY_PATH)
+    process_pid = os.getpid()
     return f"""<!DOCTYPE html>
 <html lang="zh-CN">
 <head>
 <meta charset="UTF-8">
 <meta name="viewport" content="width=device-width, initial-scale=1.0">
-<title>模型日志分析 UI</title>
+<title>Model Debug Agent</title>
 <style>
   :root {{
     --ink: #17324d;
@@ -41,10 +47,7 @@ def render_app(defaults: dict[str, str]) -> str:
     padding: 24px;
   }}
   .topbar {{
-    display: flex;
-    justify-content: space-between;
-    gap: 20px;
-    align-items: flex-start;
+    display: block;
     margin-bottom: 20px;
   }}
   .topbar h1 {{
@@ -57,18 +60,6 @@ def render_app(defaults: dict[str, str]) -> str:
     color: var(--muted);
     max-width: 760px;
     line-height: 1.55;
-  }}
-  .top-note {{
-    min-width: 250px;
-    padding: 14px 16px;
-    background: rgba(255, 255, 255, 0.84);
-    border: 1px solid rgba(23, 50, 77, 0.08);
-    border-radius: 16px;
-    box-shadow: 0 14px 34px rgba(23, 50, 77, 0.08);
-  }}
-  .top-note strong {{
-    display: block;
-    margin-bottom: 4px;
   }}
   .layout {{
     display: grid;
@@ -117,6 +108,28 @@ def render_app(defaults: dict[str, str]) -> str:
     margin-top: 6px;
     color: var(--muted);
     line-height: 1.5;
+  }}
+  .layout-note {{
+    margin-bottom: 14px;
+    padding: 12px 14px;
+    border-radius: 14px;
+    background: #f8fbfd;
+    border: 1px solid rgba(23, 50, 77, 0.08);
+  }}
+  .layout-note strong {{
+    display: block;
+    margin-bottom: 8px;
+  }}
+  .layout-tree {{
+    margin-top: 8px;
+    padding: 10px 12px;
+    border-radius: 10px;
+    background: #f2f6fb;
+    color: #304050;
+    font-size: 0.85rem;
+    line-height: 1.55;
+    white-space: pre-wrap;
+    font-family: ui-monospace, SFMono-Regular, Menlo, monospace;
   }}
   .input-row {{
     display: grid;
@@ -206,9 +219,64 @@ def render_app(defaults: dict[str, str]) -> str:
   }}
   .step-strip {{
     display: flex;
-    gap: 10px;
-    flex-wrap: wrap;
+    gap: 8px;
+    flex-wrap: nowrap;
     margin-bottom: 16px;
+    align-items: center;
+  }}
+  .step-legend {{
+    display: flex;
+    flex-wrap: nowrap;
+    margin-bottom: 10px;
+    gap: 8px;
+  }}
+  .legend-chip {{
+    display: flex;
+    align-items: flex-start;
+    gap: 8px;
+    padding: 10px 12px;
+    border-radius: 12px;
+    font-size: 0.84rem;
+    background: #f6f9fc;
+    border: 1px solid rgba(23, 50, 77, 0.08);
+    color: var(--muted);
+    flex: 0 0 auto;
+  }}
+  .legend-copy {{
+    display: grid;
+    gap: 2px;
+    min-width: 0;
+  }}
+  .legend-copy strong {{
+    color: var(--ink);
+    font-size: 0.86rem;
+  }}
+  .legend-copy span {{
+    overflow-wrap: anywhere;
+    word-break: break-word;
+  }}
+  .legend-mark {{
+    display: inline-flex;
+    align-items: center;
+    justify-content: center;
+    min-width: 18px;
+    height: 18px;
+    padding: 0 6px;
+    border-radius: 999px;
+    font-size: 0.72rem;
+    font-weight: 700;
+    letter-spacing: 0.02em;
+    background: rgba(23, 50, 77, 0.08);
+    color: var(--ink);
+  }}
+  .legend-mark.llm {{
+    background: rgba(15, 118, 110, 0.12);
+    color: var(--accent);
+  }}
+  .step-arrow {{
+    color: var(--muted);
+    font-size: 0.92rem;
+    align-self: center;
   }}
   .step-pill {{
     border-radius: 999px;
@@ -216,6 +284,74 @@ def render_app(defaults: dict[str, str]) -> str:
     background: #eef4f8;
     color: var(--muted);
     font-size: 0.84rem;
+    display: inline-flex;
+    align-items: center;
+    gap: 8px;
+    flex: 0 0 auto;
+  }}
+  .step-pill .step-label {{
+    font-weight: 600;
+  }}
+  .step-pill[data-tooltip] {{
+    position: relative;
+    cursor: help;
+  }}
+  .step-pill[data-tooltip]::after {{
+    content: attr(data-tooltip);
+    position: absolute;
+    left: 0;
+    bottom: calc(100% + 10px);
+    width: min(320px, 72vw);
+    padding: 10px 12px;
+    border-radius: 12px;
+    background: rgba(15, 23, 32, 0.96);
+    color: #f4f8fb;
+    white-space: pre-wrap;
+    line-height: 1.55;
+    font-size: 0.82rem;
+    font-weight: 400;
+    box-shadow: 0 12px 26px rgba(0, 0, 0, 0.2);
+    opacity: 0;
+    transform: translateY(6px);
+    pointer-events: none;
+    transition: opacity 0.18s ease, transform 0.18s ease;
+    z-index: 10;
+  }}
+  .step-pill[data-tooltip]::before {{
+    content: "";
+    position: absolute;
+    left: 16px;
+    bottom: calc(100% + 4px);
+    border-width: 6px;
+    border-style: solid;
+    border-color: rgba(15, 23, 32, 0.96) transparent transparent transparent;
+    opacity: 0;
+    transform: translateY(6px);
+    transition: opacity 0.18s ease, transform 0.18s ease;
+    pointer-events: none;
+    z-index: 10;
+  }}
+  .step-pill[data-tooltip]:hover::after,
+  .step-pill[data-tooltip]:hover::before {{
+    opacity: 1;
+    transform: translateY(0);
+  }}
+  .pill-mark {{
+    display: inline-flex;
+    align-items: center;
+    justify-content: center;
+    min-width: 20px;
+    height: 20px;
+    border-radius: 999px;
+    font-size: 0.7rem;
+    font-weight: 700;
+    letter-spacing: 0.02em;
+    background: rgba(23, 50, 77, 0.08);
+    color: var(--ink);
+  }}
+  .pill-mark.llm {{
+    background: rgba(15, 118, 110, 0.14);
+    color: var(--accent);
   }}
   .step-pill.active {{
     background: var(--accent-soft);
@@ -231,8 +367,13 @@ def render_app(defaults: dict[str, str]) -> str:
     border-radius: 14px;
     padding: 14px;
     background: #fbfdff;
-    min-height: 116px;
+    min-height: 160px;
+    max-height: 280px;
     line-height: 1.6;
+    overflow: auto;
+    white-space: pre-wrap;
+    font-family: ui-monospace, SFMono-Regular, Menlo, monospace;
+    font-size: 0.88rem;
   }}
   .log-box.error {{
     border-color: rgba(179, 58, 58, 0.2);
@@ -276,10 +417,17 @@ def render_app(defaults: dict[str, str]) -> str:
     border-radius: 12px;
     background: #f8fbfd;
     border: 1px solid rgba(23, 50, 77, 0.06);
+    overflow-wrap: anywhere;
+    word-break: break-word;
   }}
   .meta-item strong {{
     display: block;
     margin-bottom: 4px;
+  }}
+  #preview-path,
+  .meta-item .muted {{
+    overflow-wrap: anywhere;
+    word-break: break-word;
   }}
   .editor-toolbar {{
     display: flex;
@@ -352,7 +500,6 @@ def render_app(defaults: dict[str, str]) -> str:
   .muted {{ color: var(--muted); }}
   @media (max-width: 1100px) {{
     .layout {{ grid-template-columns: 1fr; }}
-    .topbar {{ flex-direction: column; }}
     .stack-2, .status-grid {{ grid-template-columns: 1fr; }}
   }}
 </style>
@@ -361,15 +508,9 @@ def render_app(defaults: dict[str, str]) -> str:
   <div class="page">
     <section class="topbar">
       <div>
-        <h1>Model Test Agent · 大模型辅助日志分析</h1>
+        <h1>Model Debug Agent | 智能体辅助日志分析</h1>
         <p>选择服务器上的模型目录，启动分析流程，查看报告并共享评注。</p>
       </div>
-      <aside class="top-note">
-        <strong>LLM / Agent Disclosure</strong>
-        <div class="muted">LLM API 来源：{llm_source}</div>
-        <div class="muted">LLM 模块：错误分类、调试分析、RAG / embedding</div>
-        <div class="muted">规则模块：日志提取、源码定位、报告生成</div>
-      </aside>
     </section>
 
     <section class="layout">
@@ -391,6 +532,17 @@ def render_app(defaults: dict[str, str]) -> str:
                   <button type="button" class="btn-link" data-preview-for="target_dir" data-preview-mode="dir">查看</button>
                 </div>
                 <small>每个一级子目录视为一个模型目录。</small>
+              </div>
+
+              <div class="layout-note">
+                <strong>目录约定</strong>
+                <div class="muted">程序会按下面这类结构理解模型目录，主要用于说明输入格式。</div>
+                <div class="layout-tree">target-dir/
+  01-1_model/
+    01-1_model.yaml
+    package_info.json
+    Converter_result/convert/.log/
+      latest log file</div>
               </div>
 
               <div class="field">
@@ -444,7 +596,11 @@ def render_app(defaults: dict[str, str]) -> str:
                 </div>
               </div>
 
-              <button id="run-button" class="btn-primary" type="submit">运行完整流程</button>
+              <div class="editor-actions">
+                <button id="run-button" class="btn-primary" type="submit">运行完整流程</button>
+                <button id="force-run-button" class="btn-secondary" type="button">强制重跑</button>
+              </div>
+              <small>强制重跑会重新生成稳定报告，但会保留已有 Checked By 和 Comment。</small>
             </form>
           </div>
         </div>
@@ -452,7 +608,7 @@ def render_app(defaults: dict[str, str]) -> str:
         <div class="panel">
           <div class="panel-header">
             <h2>文件预览</h2>
-            <p>可以直接打开并修改 Docker 脚本。这里也会说明这个路径在流程里的作用。</p>
+            <p>可以查看目录摘要，或打开并修改文本文件。这里也会说明所选路径在流程里的作用。</p>
           </div>
           <div class="panel-body">
             <div class="editor-toolbar">
@@ -485,7 +641,7 @@ def render_app(defaults: dict[str, str]) -> str:
           <div class="panel-body">
             <div class="status-grid">
               <div class="mini-card">
-                <div class="label">任务</div>
+                <div class="label">PID</div>
                 <div class="value" id="job-id">-</div>
               </div>
               <div class="mini-card">
@@ -498,6 +654,22 @@ def render_app(defaults: dict[str, str]) -> str:
               </div>
             </div>
 
+            <div class="step-legend">
+              <div class="legend-chip">
+                <span class="legend-mark llm">LLM</span>
+                <div class="legend-copy">
+                  <strong>大模型节点</strong>
+                  <span>错误分类、根因分析、自动修复</span>
+                </div>
+              </div>
+              <div class="legend-chip">
+                <span class="legend-mark">Tool</span>
+                <div class="legend-copy">
+                  <strong>工具节点</strong>
+                  <span>日志提取、源码定位、历史写回、报告生成</span>
+                </div>
+              </div>
+            </div>
             <div class="step-strip" id="step-strip"></div>
             <div id="job-log" class="log-box">选择模型目录后开始运行。</div>
 
@@ -543,9 +715,11 @@ def render_app(defaults: dict[str, str]) -> str:
 
 <script>
   const defaults = {defaults_json};
+  const appPid = {process_pid};
   const steps = ["extract", "source_context", "classification", "debug", "save_history", "report"];
   const form = document.getElementById("run-form");
   const runButton = document.getElementById("run-button");
+  const forceRunButton = document.getElementById("force-run-button");
   const jobIdNode = document.getElementById("job-id");
   const jobStatusNode = document.getElementById("job-status");
   const jobDetailNode = document.getElementById("job-detail");
@@ -564,6 +738,23 @@ def render_app(defaults: dict[str, str]) -> str:
   const previewPath = document.getElementById("preview-path");
   const previewMeta = document.getElementById("preview-meta");
   const previewContent = document.getElementById("preview-content");
+  const historyStorePath = {json.dumps(history_path, ensure_ascii=False)};
+  const stepLabels = {{
+    extract: "日志提取",
+    source_context: "源码定位",
+    classification: "错误分类",
+    debug: "根因分析",
+    save_history: "经验入库",
+    report: "报告生成",
+  }};
+  const stepKinds = {{
+    extract: "tool",
+    source_context: "tool",
+    classification: "llm",
+    debug: "llm",
+    save_history: "tool",
+    report: "tool",
+  }};
   let browserTarget = "";
   let browserMode = "dir";
   let selectedBrowserPath = "";
@@ -571,6 +762,8 @@ def render_app(defaults: dict[str, str]) -> str:
   let previewFilePath = "";
   let previewFileEditable = false;
   let pollTimer = null;
+  let lookupTimer = null;
+  let currentSnapshot = {{ status: "idle" }};
 
   function setDefaults() {{
     Object.entries(defaults).forEach(([key, value]) => {{
@@ -585,8 +778,12 @@ def render_app(defaults: dict[str, str]) -> str:
   }}
 
   function renderSteps(snapshot) {{
-    stepStrip.innerHTML = steps.map((step, index) => {{
+    const items = [];
+    steps.forEach((step, index) => {{
       let className = "step-pill";
+      const kind = stepKinds[step] || "tool";
+      const label = kind === "llm" ? "LLM" : "Tool";
+      const tooltip = stepTooltip(step);
       if (snapshot.status === "completed" || snapshot.status === "failed") {{
         if (index + 1 < snapshot.step_index || (snapshot.status === "completed" && index + 1 <= snapshot.step_index)) {{
           className += " done";
@@ -595,16 +792,63 @@ def render_app(defaults: dict[str, str]) -> str:
       if (snapshot.status === "running" && step === snapshot.step_key) {{
         className += " active";
       }}
-      return `<div class="${{className}}">${{step}}</div>`;
-    }}).join("");
+      items.push(
+        `<div class="${{className}}" data-tooltip="${{escapeHtml(tooltip)}}"><span class="pill-mark ${{kind}}">${{label}}</span><span class="step-label">${{stepLabels[step] || step}}</span></div>`
+      );
+      if (index < steps.length - 1) {{
+        items.push('<div class="step-arrow">→</div>');
+      }}
+    }});
+    stepStrip.innerHTML = items.join("");
+  }}
+
+  function escapeHtml(value) {{
+    return String(value || "")
+      .replace(/&/g, "&amp;")
+      .replace(/</g, "&lt;")
+      .replace(/>/g, "&gt;")
+      .replace(/"/g, "&quot;")
+      .replace(/'/g, "&#39;");
+  }}
+
+  function stepTooltip(step) {{
+    const targetDir = document.getElementById("target_dir").value.trim() || "(未选择模型目录)";
+    const outputDir = document.getElementById("output_dir").value.trim() || "./output";
+    const codebaseRoot = document.getElementById("codebase_root").value.trim() || "(未指定)";
+    const dockerScript = document.getElementById("docker_script_path").value.trim() || "(未指定)";
+    const ragDir = document.getElementById("rag_dir").value.trim() || "(未指定)";
+    if (step === "extract") {{
+      return `读取模型目录中的日志、配置和 package_info。\\n来源：${{targetDir}}\\n保存位置：仅内存，不单独落盘`;
+    }}
+    if (step === "source_context") {{
+      return `从日志中提取报错路径，并尝试补源码上下文。\\n源码目录：${{codebaseRoot}}\\nDocker 脚本：${{dockerScript}}\\n保存位置：仅内存，不单独落盘`;
+    }}
+    if (step === "classification") {{
+      return "调用大模型做错误分类。\\n输入：日志摘录、源码上下文\\n保存位置：仅内存，不单独落盘";
+    }}
+    if (step === "debug") {{
+      return `调用大模型做根因分析和修复建议。\\n输入：分类结果、历史案例、RAG 资料\\nRAG 目录：${{ragDir}}\\n保存位置：仅内存，不单独落盘`;
+    }}
+    if (step === "save_history") {{
+      return `把确认有效的经验案例写入本地经验库，供后续检索复用。\\n保存位置：${{historyStorePath}}`;
+    }}
+    if (step === "report") {{
+      return `生成 HTML / XLSX 报告。\\n保存位置：${{outputDir}} 下当前模型目录对应的稳定报告目录`;
+    }}
+    return "";
   }}
 
   function renderSnapshot(snapshot) {{
-    jobIdNode.textContent = snapshot.job_id || "-";
+    currentSnapshot = snapshot || {{ status: "idle" }};
+    jobIdNode.textContent = String(snapshot.pid || appPid || "-");
     jobStatusNode.textContent = snapshot.status || "idle";
     jobDetailNode.textContent = snapshot.detail || "等待输入";
     jobLogNode.classList.toggle("error", snapshot.status === "failed");
-    jobLogNode.textContent = snapshot.error || snapshot.detail || "等待输入";
+    const lines = Array.isArray(snapshot.messages) && snapshot.messages.length
+      ? snapshot.messages
+      : [snapshot.error || snapshot.detail || "等待输入"];
+    jobLogNode.textContent = lines.join("\\n");
+    jobLogNode.scrollTop = jobLogNode.scrollHeight;
     renderSteps(snapshot);
 
     if (snapshot.report_url) {{
@@ -612,12 +856,16 @@ def render_app(defaults: dict[str, str]) -> str:
       reportLink.href = snapshot.report_url;
       reportFrame.src = snapshot.report_url;
       reportMeta.textContent = snapshot.report_html_path || "";
+    }} else {{
+      viewerShell.hidden = true;
     }}
     if (snapshot.status === "running") {{
       runButton.disabled = true;
+      forceRunButton.disabled = true;
       runButton.textContent = "运行中...";
     }} else {{
       runButton.disabled = false;
+      forceRunButton.disabled = false;
       runButton.textContent = "运行完整流程";
     }}
   }}
@@ -640,8 +888,40 @@ def render_app(defaults: dict[str, str]) -> str:
     }}, 1000);
   }}
 
-  async function startRun(event) {{
-    event.preventDefault();
+  async function lookupExistingReport() {{
+    if (currentSnapshot.status === "running") {{
+      return;
+    }}
+    const targetDir = document.getElementById("target_dir").value.trim();
+    const outputDir = document.getElementById("output_dir").value.trim() || "./output";
+    if (!targetDir) {{
+      return;
+    }}
+    const response = await fetch(
+      `/api/report-lookup?target_dir=${{encodeURIComponent(targetDir)}}&output_dir=${{encodeURIComponent(outputDir)}}`
+    );
+    if (!response.ok) {{
+      return;
+    }}
+    const payload = await response.json();
+    if (payload.exists) {{
+      renderSnapshot(payload);
+    }}
+  }}
+
+  function scheduleExistingReportLookup() {{
+    if (lookupTimer) {{
+      window.clearTimeout(lookupTimer);
+    }}
+    lookupTimer = window.setTimeout(() => {{
+      void lookupExistingReport();
+    }}, 250);
+  }}
+
+  async function startRun(event, forceRerun = false) {{
+    if (event) {{
+      event.preventDefault();
+    }}
     const payload = {{
       target_dir: document.getElementById("target_dir").value.trim(),
       output_dir: document.getElementById("output_dir").value.trim(),
@@ -652,6 +932,7 @@ def render_app(defaults: dict[str, str]) -> str:
       llm_config_path: document.getElementById("llm_config_path").value.trim(),
       auto_fix: document.getElementById("auto_fix").checked,
       max_retries: Number(document.getElementById("max_retries").value || "2"),
+      force_rerun: forceRerun,
     }};
     const response = await fetch("/api/run", {{
       method: "POST",
@@ -660,6 +941,13 @@ def render_app(defaults: dict[str, str]) -> str:
     }});
     const result = await response.json();
     if (!response.ok) {{
+      if (result.snapshot) {{
+        renderSnapshot(result.snapshot);
+        if ((result.snapshot.status || "") === "running") {{
+          schedulePoll();
+        }}
+        return;
+      }}
       renderSnapshot({{ status: "failed", detail: "启动失败", error: result.error || "未知错误" }});
       return;
     }}
@@ -804,6 +1092,9 @@ def render_app(defaults: dict[str, str]) -> str:
     }}
     if (browserTarget) {{
       document.getElementById(browserTarget).value = selectedBrowserPath;
+      if (browserTarget === "target_dir" || browserTarget === "output_dir") {{
+        scheduleExistingReportLookup();
+      }}
     }}
     browser.classList.remove("open");
   }});
@@ -824,10 +1115,16 @@ def render_app(defaults: dict[str, str]) -> str:
     }}
   }});
   document.getElementById("preview-save").addEventListener("click", () => void savePreview());
-  form.addEventListener("submit", startRun);
+  document.getElementById("target_dir").addEventListener("change", scheduleExistingReportLookup);
+  document.getElementById("target_dir").addEventListener("blur", scheduleExistingReportLookup);
+  document.getElementById("output_dir").addEventListener("change", scheduleExistingReportLookup);
+  document.getElementById("output_dir").addEventListener("blur", scheduleExistingReportLookup);
+  form.addEventListener("submit", (event) => void startRun(event, false));
+  forceRunButton.addEventListener("click", () => void startRun(null, true));
 
   setDefaults();
   renderSnapshot({{ status: "idle", detail: "等待输入", error: "" }});
+  void lookupExistingReport();
   void fetchSnapshot();
 </script>
 </body>

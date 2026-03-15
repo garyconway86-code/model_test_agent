@@ -16,8 +16,6 @@ as nodes, so they can also be invoked independently.
 """
 
 from __future__ import annotations
-
-import hashlib
 import json
 from pathlib import Path
 from typing import Any
@@ -38,6 +36,7 @@ from model_test_agent.state import (
 from model_test_agent.tools.config_reader import ConfigReader
 from model_test_agent.tools.history_store import HistoryStore
 from model_test_agent.tools.log_extractor import LogExtractor
+from model_test_agent.tools.report_paths import report_output_dir
 from model_test_agent.tools.report_generator import ReportGenerator
 from model_test_agent.tools.source_context import SourceContextResolver
 
@@ -198,7 +197,7 @@ def _report(state: AgentState) -> dict[str, Any]:
         ),
     }
 
-    report_dir = _report_output_dir(state.get("output_dir", "."), state.get("target_dir", ""))
+    report_dir = report_output_dir(state.get("output_dir", "."), state.get("target_dir", ""))
     gen = ReportGenerator(output_dir=report_dir)
     xlsx_path = gen.generate_xlsx(rows, filename="report.xlsx")
     html_path = gen.generate_html(
@@ -290,24 +289,6 @@ def _load_package_summary(model: ModelInfo | None) -> str:
     if commit:
         parts.append(f"commit {str(commit)[:8]}")
     return " | ".join(parts)
-
-
-def _report_output_dir(output_dir: str, target_dir: str) -> Path:
-    base = Path(output_dir or ".").resolve()
-    if not target_dir:
-        return base
-    target_path = Path(target_dir).resolve()
-    target_id = _stable_target_id(target_path)
-    report_dir = base / target_id
-    report_dir.mkdir(parents=True, exist_ok=True)
-    return report_dir
-
-
-def _stable_target_id(target_path: Path) -> str:
-    label = target_path.name or "target"
-    digest = hashlib.sha1(str(target_path).encode("utf-8")).hexdigest()[:8]
-    safe_label = "".join(char if char.isalnum() or char in {"-", "_"} else "-" for char in label).strip("-")
-    return f"{safe_label or 'target'}-{digest}"
 
 
 def _config_hints(model: ModelInfo | None, limit: int = 4) -> str:

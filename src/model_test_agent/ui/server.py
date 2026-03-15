@@ -10,6 +10,7 @@ from pathlib import Path
 from typing import Any
 from urllib.parse import parse_qs, quote, unquote, urlsplit
 
+from model_test_agent.tools.report_paths import report_artifacts
 from model_test_agent.tools.report_server import load_review_state, review_state_path, save_review_state
 from model_test_agent.ui.job_runner import PipelineJobRunner
 from model_test_agent.ui.templates import render_app
@@ -89,6 +90,9 @@ class _UIServerRequestHandler(BaseHTTPRequestHandler):
         if request.path == "/api/job":
             self._write_json(HTTPStatus.OK, self._app.runner.latest().to_dict())
             return
+        if request.path == "/api/report-lookup":
+            self._handle_report_lookup(request.query)
+            return
         if request.path == "/api/review-state":
             self._handle_get_review_state(request.query)
             return
@@ -122,10 +126,22 @@ class _UIServerRequestHandler(BaseHTTPRequestHandler):
             "max_retries": int(payload.get("max_retries", 2) or 2),
             "retry_count": 0,
         }
+        force_rerun = bool(payload.get("force_rerun", False))
+        if not force_rerun:
+            existing = self._existing_report_snapshot(config)
+            if existing is not None:
+                self._write_json(HTTPStatus.OK, existing.to_dict())
+                return
         try:
             snapshot = self._app.runner.start(config)
         except RuntimeError as exc:
-            self._write_json(HTTPStatus.CONFLICT, {"error": str(exc)})
+            self._write_json(
+                HTTPStatus.CONFLICT,
+                {
+                    "error": str(exc),
+                    "snapshot": self._app.runner.latest().to_dict(),
+                },
+            )
             return
         self._write_json(HTTPStatus.ACCEPTED, snapshot.to_dict())
 
@@ -164,6 +180,26 @@ class _UIServerRequestHandler(BaseHTTPRequestHandler):
                 "entries": entries,
             },
         )
+
+    def _handle_report_lookup(self, query: str) -> None:
+        params = parse_qs(query)
+        target_dir = str(params.get("target_dir", [""])[0] or "").strip()
+        output_dir = str(params.get("output_dir", ["./output"])[0] or "./output").strip()
+        if not target_dir:
+            self._write_json(HTTPStatus.OK, {"exists": False})
+            return
+        artifacts = report_artifacts(output_dir, target_dir)
+        exists = artifacts["html"].is_file()
+        payload = {
+            "exists": exists,
+            "report_html_path": str(artifacts["html"]),
+            "report_path": str(artifacts["xlsx"]),
+            "review_path": str(artifacts["review"]),
+        }
+        if exists:
+            snapshot = self._app.runner.load_existing(target_dir, str(artifacts["html"]), str(artifacts["xlsx"]))
+            payload.update(snapshot.to_dict())
+        self._write_json(HTTPStatus.OK, payload)
 
     def _handle_get_file(self, query: str) -> None:
         try:
@@ -272,6 +308,15 @@ class _UIServerRequestHandler(BaseHTTPRequestHandler):
                 "review_path": str(review_state_path(report_path)),
             },
         )
+
+    def _existing_report_snapshot(self, config: dict[str, Any]):
+        target_dir = str(config.get("target_dir", "") or "").strip()
+        if not target_dir:
+            return None
+        artifacts = report_artifacts(str(config.get("output_dir", "./output") or "./output"), target_dir)
+        if not artifacts["html"].is_file():
+            return None
+        return self._app.runner.load_existing(target_dir, str(artifacts["html"]), str(artifacts["xlsx"]))
 
     def _report_path_from_query(self, query: str) -> Path:
         params = parse_qs(query)

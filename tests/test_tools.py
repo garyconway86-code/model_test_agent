@@ -555,11 +555,18 @@ class TestReportGenerator:
         assert "Open File" in content
         assert "shape mismatch" in content
         assert 'cell-suggested_fix' in content
-        assert '<th>Checked By</th><th>Comment</th><th>Model Name</th>' in content
-        assert '<th>Error Category</th><th>Log</th>' in content
-        assert content.count("<th>Comment</th>") == 1
+        assert 'data-col-key="checked_by">Checked By</th><th data-col-key="comment">Comment</th><th data-col-key="model_name"' in content
+        assert 'data-col-key="error_category"' in content
+        assert 'data-col-key="log">Log</th>' in content
+        assert content.count('data-col-key="comment">Comment</th>') == 1
         assert "Config Hints" in content
         assert "01-1_yolo.yaml | Config/legacy.yaml" in content
+        assert 'data-column-toggle="has_test_data"' in content
+        assert 'data-column-toggle="config_hints"' in content
+        assert 'data-col-key="has_test_data" class="col-hidden"' in content
+        assert 'data-col-key="config_hints" class="col-hidden"' in content
+        assert "column-toggle-panel" in content
+        assert "显示列" in content
         assert 'data-filter-kind="checked"' in content
         assert "Unchecked" in content
         assert "column-resizer" in content
@@ -571,9 +578,8 @@ class TestReportGenerator:
         assert "Passed Models" in content
         assert ">2</div>" in content
         assert "Agent Assist" in content
-        assert "Target Layout" in content
         assert "/demo/Models_35" in content
-        assert "01-1_model.yaml" in content
+        assert "Target Dir: /demo/Models_35" in content
         assert "deepseek-chat" in content
         assert "demo-kit | v1.2.3" in content
 

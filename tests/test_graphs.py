@@ -8,12 +8,12 @@ from model_test_agent.graphs.main_graph import (
     _enrich_source_context,
     _extract,
     _report,
-    _report_output_dir,
     _summarize_suggested_fixes,
     build_main_graph,
 )
 from model_test_agent.graphs.snr_subgraph import build_snr_subgraph
 from model_test_agent.state import DebugResult, ErrorEntry, FixStatus, ModelInfo
+from model_test_agent.tools.report_paths import report_output_dir
 
 
 class TestGraphConstruction:
@@ -238,9 +238,9 @@ class TestGraphConstruction:
         assert captured["output_dir"].startswith(str((tmp_path / "output").resolve()))
 
     def test_report_output_dir_is_stable_per_target_dir(self, tmp_path) -> None:
-        output_a = _report_output_dir(str(tmp_path / "output"), str(tmp_path / "Models_35"))
-        output_b = _report_output_dir(str(tmp_path / "output"), str(tmp_path / "Models_35"))
-        output_c = _report_output_dir(str(tmp_path / "output"), str(tmp_path / "OtherModels"))
+        output_a = report_output_dir(str(tmp_path / "output"), str(tmp_path / "Models_35"))
+        output_b = report_output_dir(str(tmp_path / "output"), str(tmp_path / "Models_35"))
+        output_c = report_output_dir(str(tmp_path / "output"), str(tmp_path / "OtherModels"))
 
         assert output_a == output_b
         assert output_a.name.startswith("Models_35-")

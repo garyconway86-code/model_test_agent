@@ -58,3 +58,6 @@ html:
   filename_template: "test_report_{timestamp}.html"
   title: "Model Conversion Test Report"
   include_charts: true
+  default_hidden_columns:
+    - has_test_data
+    - config_hints

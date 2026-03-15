@@ -2,7 +2,9 @@
 
 from __future__ import annotations
 
-from dataclasses import asdict, dataclass
+from dataclasses import asdict, dataclass, field
+import os
+from pathlib import Path
 from threading import Lock, Thread
 from typing import Any, Callable
 from uuid import uuid4
@@ -25,6 +27,8 @@ class JobSnapshot:
     report_html_path: str = ""
     report_url: str = ""
     target_dir: str = ""
+    pid: int = 0
+    messages: list[str] = field(default_factory=list)
 
     def to_dict(self) -> dict[str, Any]:
         return asdict(self)
@@ -66,6 +70,8 @@ class PipelineJobRunner:
                 status="running",
                 detail="Queued",
                 target_dir=str(config.get("target_dir", "") or ""),
+                pid=os.getpid(),
+                messages=["Queued pipeline run"],
             )
             self._jobs[job_id] = snapshot
             self._latest_job_id = job_id
@@ -74,6 +80,28 @@ class PipelineJobRunner:
         thread = Thread(target=self._run_job, args=(job_id, dict(config)), daemon=True)
         thread.start()
         return self.get(job_id)
+
+    def load_existing(self, target_dir: str, report_html_path: str, report_path: str = "") -> JobSnapshot:
+        with self._lock:
+            job_id = uuid4().hex[:8]
+            report_html = str(Path(report_html_path).resolve())
+            snapshot = JobSnapshot(
+                job_id=job_id,
+                status="completed",
+                step_key="report",
+                step_index=6,
+                total_steps=6,
+                detail="Loaded existing report",
+                report_path=str(report_path),
+                report_html_path=report_html,
+                report_url=self._report_url_builder(job_id, report_html),
+                target_dir=target_dir,
+                pid=os.getpid(),
+                messages=["Loaded existing report"],
+            )
+            self._jobs[job_id] = snapshot
+            self._latest_job_id = job_id
+            return JobSnapshot(**snapshot.to_dict())
 
     def _run_job(self, job_id: str, config: dict[str, Any]) -> None:
         def _on_event(event: PipelineEvent) -> None:
@@ -84,6 +112,7 @@ class PipelineJobRunner:
                 snapshot.step_index = event.step_index
                 snapshot.total_steps = event.total_steps
                 snapshot.detail = self._event_detail(event)
+                self._append_message(snapshot, self._event_message(event))
                 if event.phase == "error":
                     snapshot.error = event.error
 
@@ -95,6 +124,7 @@ class PipelineJobRunner:
                 snapshot.status = "failed"
                 snapshot.error = str(exc.original_error)
                 snapshot.detail = f"{exc.step_key} failed"
+                self._append_message(snapshot, f"ERROR {exc.step_key}: {exc.original_error}")
                 self._active_job_id = ""
             return
         except Exception as exc:  # pragma: no cover - defensive fallback for UI threads
@@ -103,6 +133,7 @@ class PipelineJobRunner:
                 snapshot.status = "failed"
                 snapshot.error = str(exc)
                 snapshot.detail = "pipeline failed"
+                self._append_message(snapshot, f"ERROR pipeline: {exc}")
                 self._active_job_id = ""
             return
 
@@ -119,7 +150,19 @@ class PipelineJobRunner:
             snapshot.report_url = (
                 self._report_url_builder(job_id, report_html_path) if report_html_path else ""
             )
+            self._append_message(snapshot, snapshot.detail)
             self._active_job_id = ""
+
+    @staticmethod
+    def _append_message(snapshot: JobSnapshot, message: str) -> None:
+        text = (message or "").strip()
+        if not text:
+            return
+        if snapshot.messages and snapshot.messages[-1] == text:
+            return
+        snapshot.messages.append(text)
+        if len(snapshot.messages) > 120:
+            snapshot.messages = snapshot.messages[-120:]
 
     @staticmethod
     def _event_detail(event: PipelineEvent) -> str:
@@ -141,3 +184,12 @@ class PipelineJobRunner:
         if event.step_key == "report":
             return f"{len(state.get('report_rows', []))} report rows"
         return event.step_key
+
+    @staticmethod
+    def _event_message(event: PipelineEvent) -> str:
+        detail = PipelineJobRunner._event_detail(event)
+        if event.phase == "start":
+            return f"START {event.step_key}: {detail}"
+        if event.phase == "error":
+            return f"ERROR {event.step_key}: {event.error}"
+        return f"DONE {event.step_key}: {detail}"

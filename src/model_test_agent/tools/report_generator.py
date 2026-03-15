@@ -128,6 +128,9 @@ class ReportGenerator:
         xlsx_cfg = self._cfg.get("xlsx", {})
         xlsx_columns: list[dict[str, Any]] = xlsx_cfg.get("columns", self._default_columns())
         html_columns = [column for column in xlsx_columns if column.get("key") not in {"checked_by", "comment"}]
+        default_hidden_columns = set(
+            html_cfg.get("default_hidden_columns", ["has_test_data", "config_hints"])
+        )
 
         if filename is None:
             ts = datetime.now().strftime("%Y%m%d_%H%M%S")
@@ -137,15 +140,19 @@ class ReportGenerator:
         title = html_cfg.get("title", "Model Conversion Test Report")
 
         # Build table rows
-        header_cells = "<th>Checked By</th><th>Comment</th>"
+        header_cells = '<th data-col-key="checked_by">Checked By</th><th data-col-key="comment">Comment</th>'
         log_inserted = False
         for column in html_columns:
-            header_cells += f'<th>{html.escape(column["header"])}</th>'
+            hidden_class = " col-hidden" if column["key"] in default_hidden_columns else ""
+            header_cells += (
+                f'<th data-col-key="{html.escape(column["key"], quote=True)}" class="{hidden_class.strip()}">'
+                f'{html.escape(column["header"])}</th>'
+            )
             if column["key"] == "error_category":
-                header_cells += "<th>Log</th>"
+                header_cells += '<th data-col-key="log">Log</th>'
                 log_inserted = True
         if not log_inserted:
-            header_cells += "<th>Log</th>"
+            header_cells += '<th data-col-key="log">Log</th>'
         body_rows = []
         log_cache: dict[str, str] = {}
         for i, report_row in enumerate(rows):
@@ -166,7 +173,13 @@ class ReportGenerator:
             log_cell = f'<td class="log-actions">{self._build_log_actions(report_row, log_id)}</td>'
             log_inserted = False
             for column in html_columns:
-                cell_parts.append(self._build_table_cell(column["key"], rd.get(column["key"], "")))
+                cell_parts.append(
+                    self._build_table_cell(
+                        column["key"],
+                        rd.get(column["key"], ""),
+                        hidden=column["key"] in default_hidden_columns,
+                    )
+                )
                 if column["key"] == "error_category":
                     cell_parts.append(log_cell)
                     log_inserted = True
@@ -211,6 +224,14 @@ class ReportGenerator:
             f"<td>{html.escape(st)}</td><td>{cnt}</td></tr>"
             for st, cnt in sorted(by_status.items())
         )
+        toggle_controls = "".join(
+            self._build_column_toggle(
+                column["key"],
+                column["header"],
+                checked=column["key"] not in default_hidden_columns,
+            )
+            for column in html_columns
+        )
         html_output = _HTML_TEMPLATE.format(
             title=title,
             header_cells=header_cells,
@@ -227,6 +248,7 @@ class ReportGenerator:
             layout_config=html.escape(source_info.get("layout_config", "built-in defaults")),
             discovery_rule=html.escape(source_info.get("discovery_rule", "")),
             source_tree=html.escape(source_info.get("source_tree", "")),
+            column_toggles=toggle_controls,
             timestamp=datetime.now().strftime("%Y-%m-%d %H:%M:%S"),
             visible_rows=len(rows),
         )
@@ -279,11 +301,15 @@ class ReportGenerator:
         ]
 
     @staticmethod
-    def _build_table_cell(key: str, value: Any) -> str:
+    def _build_table_cell(key: str, value: Any, hidden: bool = False) -> str:
         text = html.escape(str(value))
-        css_class = f' class="cell-{html.escape(key, quote=True)}"' if key else ""
+        classes = [f"cell-{html.escape(key, quote=True)}"] if key else []
+        if hidden:
+            classes.append("col-hidden")
+        attr = f' data-col-key="{html.escape(key, quote=True)}"' if key else ""
+        css_class = f' class="{" ".join(classes)}"' if classes else ""
         title = f' title="{text}"' if key in {"suggested_fix", "key_log_snippet"} and text else ""
-        return f"<td{css_class}{title}>{text}</td>"
+        return f"<td{attr}{css_class}{title}>{text}</td>"
 
     @staticmethod
     def _build_log_actions(row: ReportRow, log_id: str) -> str:
@@ -304,7 +330,7 @@ class ReportGenerator:
         checked_attr = " checked" if checked_by else ""
         label = html.escape(checked_by) if checked_by else "-"
         return (
-            '<td class="checked-by-cell"'
+            '<td class="checked-by-cell" data-col-key="checked_by"'
             f' data-row-key="{html.escape(row_key, quote=True)}"'
             f' data-initial-checked-by="{html.escape(checked_by, quote=True)}">'
             '<label class="checked-by-toggle">'
@@ -319,11 +345,21 @@ class ReportGenerator:
     def _build_comment_cell(row: ReportRow, row_key: str) -> str:
         comment = html.escape(row.comment.strip())
         return (
-            '<td class="comment-cell"'
+            '<td class="comment-cell" data-col-key="comment"'
             f' data-row-key="{html.escape(row_key, quote=True)}"'
             f' data-initial-comment="{comment}">'
             f'<textarea class="comment-input" rows="2" placeholder="Add comment">{comment}</textarea>'
             "</td>"
+        )
+
+    @staticmethod
+    def _build_column_toggle(key: str, header: str, checked: bool) -> str:
+        checked_attr = " checked" if checked else ""
+        return (
+            '<label class="column-toggle">'
+            f'<input type="checkbox" data-column-toggle="{html.escape(key, quote=True)}"{checked_attr}>'
+            f"<span>{html.escape(header)}</span>"
+            "</label>"
         )
 
     @classmethod
@@ -440,9 +476,6 @@ _HTML_TEMPLATE = """\
   .summary-card.agent {{
     min-width: 320px;
   }}
-  .summary-card.source {{
-    min-width: 360px;
-  }}
   .summary-card h3 {{
     font-size: 0.85em;
     color: #7f8c8d;
@@ -456,26 +489,7 @@ _HTML_TEMPLATE = """\
     line-height: 1.6;
     color: #425466;
   }}
-  .source-lines {{
-    font-size: 0.92em;
-    line-height: 1.6;
-    color: #425466;
-  }}
-  .source-tree {{
-    margin-top: 10px;
-    padding: 12px;
-    border-radius: 8px;
-    background: #f6f8fb;
-    color: #304050;
-    font-size: 0.86em;
-    line-height: 1.55;
-    white-space: pre-wrap;
-    font-family: ui-monospace, SFMono-Regular, Menlo, monospace;
-  }}
   .agent-lines strong {{
-    color: var(--primary);
-  }}
-  .source-lines strong {{
     color: var(--primary);
   }}
   .summary-card table {{ width: 100%; font-size: 0.9em; }}
@@ -499,6 +513,35 @@ _HTML_TEMPLATE = """\
     align-items: center;
     gap: 12px;
     flex-wrap: wrap;
+  }}
+  .column-toggle-panel {{
+    display: inline-flex;
+    align-items: center;
+    gap: 10px;
+    flex-wrap: wrap;
+    padding: 8px 12px;
+    border-radius: 999px;
+    background: #eef4fb;
+  }}
+  .column-toggle-label {{
+    font-weight: 600;
+    color: #425466;
+  }}
+  .column-toggle-list {{
+    display: inline-flex;
+    align-items: center;
+    gap: 10px;
+    flex-wrap: wrap;
+  }}
+  .column-toggle {{
+    display: inline-flex;
+    align-items: center;
+    gap: 6px;
+    font-size: 0.88em;
+    color: #425466;
+  }}
+  .column-toggle input {{
+    accent-color: var(--primary);
   }}
   .filter-pills {{
     display: inline-flex;
@@ -681,6 +724,7 @@ _HTML_TEMPLATE = """\
   }}
   table.report tr.alt {{ background: var(--primary-light); }}
   table.report tr:hover {{ background: #eaf2f8; }}
+  .col-hidden {{ display: none; }}
   tr[hidden] {{ display: none !important; }}
   footer {{
     margin-top: 24px;
@@ -725,6 +769,7 @@ _HTML_TEMPLATE = """\
     const commentCells = Array.from(document.querySelectorAll(".comment-cell"));
     const filterState = document.getElementById("filter-state");
     const clearButton = document.getElementById("clear-filters");
+    const columnToggles = Array.from(document.querySelectorAll("[data-column-toggle]"));
     const toast = document.getElementById("toast");
     const usernameStorageKey = "model-test-agent:checked-by-user";
     const reportStorageKey = `model-test-agent:report-review:${{window.location.pathname}}`;
@@ -996,6 +1041,12 @@ _HTML_TEMPLATE = """\
       syncActiveStates();
     }}
 
+    function setColumnVisibility(columnKey, visible) {{
+      document.querySelectorAll(`[data-col-key="${{columnKey}}"]`).forEach((node) => {{
+        node.classList.toggle("col-hidden", !visible);
+      }});
+    }}
+
     checkedByCells.forEach((cell) => {{
       const rowKey = cell.dataset.rowKey;
       const checkbox = cell.querySelector(".checked-by-checkbox");
@@ -1144,6 +1195,13 @@ _HTML_TEMPLATE = """\
       }});
     }});
 
+    columnToggles.forEach((toggle) => {{
+      setColumnVisibility(toggle.dataset.columnToggle || "", toggle.checked);
+      toggle.addEventListener("change", () => {{
+        setColumnVisibility(toggle.dataset.columnToggle || "", toggle.checked);
+      }});
+    }});
+
     enableColumnResize();
     applyFilters();
     void hydrateRemoteReviewState();
@@ -1152,7 +1210,7 @@ _HTML_TEMPLATE = """\
 </head>
 <body>
   <h1>{title}</h1>
-  <div class="meta">Generated: {timestamp}</div>
+  <div class="meta">Generated: {timestamp}<br>Target Dir: {target_dir}</div>
 
   <div class="summary">
     <div class="summary-card filter-card active" data-filter-kind="group" data-filter-value="all">
@@ -1183,15 +1241,6 @@ _HTML_TEMPLATE = """\
         <div><strong>AI-assisted fields</strong>: {assisted_fields}</div>
       </div>
     </div>
-    <div class="summary-card source">
-      <h3>Target Layout</h3>
-      <div class="source-lines">
-        <div><strong>Target Dir</strong>: {target_dir}</div>
-        <div><strong>Layout Config</strong>: {layout_config}</div>
-        <div><strong>Discovery</strong>: {discovery_rule}</div>
-      </div>
-      <div class="source-tree">{source_tree}</div>
-    </div>
   </div>
 
   <div class="toolbar">
@@ -1202,6 +1251,10 @@ _HTML_TEMPLATE = """\
         <button type="button" class="filter-option active" data-filter-kind="checked" data-filter-value="all">All</button>
         <button type="button" class="filter-option" data-filter-kind="checked" data-filter-value="checked">Checked</button>
         <button type="button" class="filter-option" data-filter-kind="checked" data-filter-value="unchecked">Unchecked</button>
+      </div>
+      <div class="column-toggle-panel" aria-label="Column visibility">
+        <span class="column-toggle-label">显示列</span>
+        <div class="column-toggle-list">{column_toggles}</div>
       </div>
     </div>
     <button type="button" id="clear-filters">Clear Filters</button>
