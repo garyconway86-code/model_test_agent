@@ -147,7 +147,7 @@ class ReportGenerator:
             if i % 2 == 1:
                 row_classes.append("alt")
             cells = "".join(
-                f"<td>{html.escape(str(rd.get(c['key'], '')))}</td>"
+                self._build_table_cell(c["key"], rd.get(c["key"], ""))
                 for c in columns
             )
             row_id = f"row-{i}"
@@ -193,7 +193,6 @@ class ReportGenerator:
             f"<td>{html.escape(st)}</td><td>{cnt}</td></tr>"
             for st, cnt in sorted(by_status.items())
         )
-
         html_output = _HTML_TEMPLATE.format(
             title=title,
             header_cells=header_cells,
@@ -252,11 +251,18 @@ class ReportGenerator:
             {"key": "error_category", "header": "Error Category", "width": 18},
             {"key": "key_log_snippet", "header": "Key Log (truncated)", "width": 50},
             {"key": "history_match", "header": "Seen Before", "width": 12},
-            {"key": "suggested_fix", "header": "Suggested Fix", "width": 55},
+            {"key": "suggested_fix", "header": "Suggested Fix", "width": 72},
             {"key": "fix_executed", "header": "Fix Executed", "width": 12},
             {"key": "fix_result", "header": "Fix Result", "width": 18},
             {"key": "status", "header": "Status", "width": 12},
         ]
+
+    @staticmethod
+    def _build_table_cell(key: str, value: Any) -> str:
+        text = html.escape(str(value))
+        css_class = f' class="cell-{html.escape(key, quote=True)}"' if key else ""
+        title = f' title="{text}"' if key in {"suggested_fix", "key_log_snippet"} and text else ""
+        return f"<td{css_class}{title}>{text}</td>"
 
     @staticmethod
     def _build_log_actions(row: ReportRow, log_id: str) -> str:
@@ -265,8 +271,10 @@ class ReportGenerator:
         file_link = Path(row.log_path).resolve().as_uri()
         return (
             f'<button type="button" class="log-toggle" data-target="{log_id}">View Source</button>'
-            f'<a class="log-link" href="{html.escape(file_link)}" target="_blank" rel="noopener noreferrer">'
-            "Open File</a>"
+            f'<button type="button" class="log-link log-open"'
+            f' data-file-link="{html.escape(file_link, quote=True)}"'
+            f' data-log-path="{html.escape(row.log_path, quote=True)}">'
+            "Open File</button>"
         )
 
     @staticmethod
@@ -493,6 +501,18 @@ _HTML_TEMPLATE = """\
     border-bottom: 1px solid #ecf0f1;
     max-width: 400px;
     word-wrap: break-word;
+    overflow-wrap: anywhere;
+    vertical-align: top;
+  }}
+  table.report td.cell-suggested_fix {{
+    min-width: 420px;
+    max-width: 720px;
+    white-space: pre-wrap;
+    line-height: 1.55;
+  }}
+  table.report td.cell-key_log_snippet {{
+    max-width: 520px;
+    white-space: pre-wrap;
   }}
   .checked-by-cell {{
     min-width: 170px;
@@ -536,8 +556,10 @@ _HTML_TEMPLATE = """\
     color: #fff;
   }}
   .log-link {{
+    border: 0;
     background: #eef4fb;
     color: var(--primary);
+    cursor: pointer;
   }}
   .muted {{
     color: #95a5a6;
@@ -583,6 +605,28 @@ _HTML_TEMPLATE = """\
     color: #95a5a6;
     font-size: 0.8em;
   }}
+  .toast {{
+    position: fixed;
+    right: 24px;
+    bottom: 24px;
+    max-width: 380px;
+    padding: 12px 14px;
+    border-radius: 10px;
+    background: rgba(15, 23, 32, 0.94);
+    color: #f4f8fb;
+    box-shadow: 0 10px 24px rgba(0,0,0,0.22);
+    font-size: 0.9em;
+    line-height: 1.45;
+    opacity: 0;
+    transform: translateY(10px);
+    pointer-events: none;
+    transition: opacity 0.18s ease, transform 0.18s ease;
+    z-index: 20;
+  }}
+  .toast.visible {{
+    opacity: 1;
+    transform: translateY(0);
+  }}
 </style>
 <script>
   document.addEventListener("DOMContentLoaded", () => {{
@@ -596,9 +640,12 @@ _HTML_TEMPLATE = """\
     const checkedByCells = Array.from(document.querySelectorAll(".checked-by-cell"));
     const filterState = document.getElementById("filter-state");
     const clearButton = document.getElementById("clear-filters");
+    const toast = document.getElementById("toast");
     const usernameStorageKey = "model-test-agent:checked-by-user";
     const reportStorageKey = `model-test-agent:report-checks:${{window.location.pathname}}`;
     const checkedByState = loadCheckedByState();
+    const canOpenLocalFiles = window.location.protocol === "file:";
+    let toastTimer = null;
 
     function loadCheckedByState() {{
       try {{
@@ -612,6 +659,34 @@ _HTML_TEMPLATE = """\
 
     function saveCheckedByState() {{
       window.localStorage.setItem(reportStorageKey, JSON.stringify(checkedByState));
+    }}
+
+    function showToast(message) {{
+      if (!toast) return;
+      toast.textContent = message;
+      toast.classList.add("visible");
+      if (toastTimer) {{
+        window.clearTimeout(toastTimer);
+      }}
+      toastTimer = window.setTimeout(() => {{
+        toast.classList.remove("visible");
+      }}, 2400);
+    }}
+
+    async function copyText(value) {{
+      if (navigator.clipboard && navigator.clipboard.writeText) {{
+        await navigator.clipboard.writeText(value);
+        return;
+      }}
+      const helper = document.createElement("textarea");
+      helper.value = value;
+      helper.setAttribute("readonly", "");
+      helper.style.position = "absolute";
+      helper.style.left = "-9999px";
+      document.body.appendChild(helper);
+      helper.select();
+      document.execCommand("copy");
+      document.body.removeChild(helper);
     }}
 
     function getStoredUsername() {{
@@ -779,6 +854,31 @@ _HTML_TEMPLATE = """\
       }});
     }});
 
+    document.querySelectorAll(".log-open").forEach((button) => {{
+      if (!canOpenLocalFiles) {{
+        button.textContent = "Copy Path";
+        button.title = "Browsers block opening local files from hosted reports. Click to copy the log path.";
+      }}
+      button.addEventListener("click", async () => {{
+        const fileLink = button.dataset.fileLink || "";
+        const logPath = button.dataset.logPath || "";
+        if (canOpenLocalFiles && fileLink) {{
+          window.open(fileLink, "_blank", "noopener,noreferrer");
+          return;
+        }}
+        if (!logPath) {{
+          showToast("Log path is not available for this row.");
+          return;
+        }}
+        try {{
+          await copyText(logPath);
+          showToast("Local file path copied. Hosted reports cannot open local files directly.");
+        }} catch (_error) {{
+          showToast("Unable to copy the log path. Please use the path shown in the source panel.");
+        }}
+      }});
+    }});
+
     applyFilters();
   }});
 </script>
@@ -800,6 +900,14 @@ _HTML_TEMPLATE = """\
       <h3>Failed Models</h3>
       <div class="big" style="color: var(--danger);">{failed_models}</div>
     </div>
+    <div class="summary-card">
+      <h3>Errors by Category</h3>
+      <table>{stats_rows}</table>
+    </div>
+    <div class="summary-card">
+      <h3>Status</h3>
+      <table>{status_rows}</table>
+    </div>
     <div class="summary-card agent">
       <h3>Agent Assist</h3>
       <div class="agent-lines">
@@ -816,14 +924,6 @@ _HTML_TEMPLATE = """\
         <div><strong>Discovery</strong>: {discovery_rule}</div>
       </div>
       <div class="source-tree">{source_tree}</div>
-    </div>
-    <div class="summary-card">
-      <h3>Errors by Category</h3>
-      <table>{stats_rows}</table>
-    </div>
-    <div class="summary-card">
-      <h3>Status</h3>
-      <table>{status_rows}</table>
     </div>
   </div>
 
@@ -842,6 +942,7 @@ _HTML_TEMPLATE = """\
   </div>
 
   <footer>model-test-agent v0.1.0</footer>
+  <div id="toast" class="toast" aria-live="polite"></div>
 </body>
 </html>
 """

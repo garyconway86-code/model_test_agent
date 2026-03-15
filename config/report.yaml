@@ -32,7 +32,7 @@ xlsx:
       width: 12
     - key: suggested_fix
       header: "Suggested Fix"
-      width: 55
+      width: 72
     - key: fix_executed
       header: "Fix Executed"
       width: 12

@@ -382,6 +382,7 @@ class TestReportGenerator:
         assert "View Source" in content
         assert "Open File" in content
         assert "shape mismatch" in content
+        assert 'cell-suggested_fix' in content
         assert "Passed Models" in content
         assert ">2</div>" in content
         assert "Agent Assist" in content
