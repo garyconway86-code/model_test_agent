@@ -93,9 +93,11 @@ class AgentState(TypedDict, total=False):
     target_dir: str
     log_dir: str
     config_path: str
+    target_layout_path: str
     output_dir: str
     llm_config_path: str
     auto_fix: bool
+    source_info: dict[str, str]
 
     # --- Extracted data ---
     models: list[ModelInfo]

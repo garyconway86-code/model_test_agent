@@ -1,0 +1,9 @@
+config_patterns:
+  - model_config.yaml
+package_info_patterns:
+  - package_info.json
+log_dir_patterns:
+  - runs
+log_file_patterns:
+  - "*.log"
+latest_log_file: true

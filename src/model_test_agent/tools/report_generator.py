@@ -207,6 +207,7 @@ class ReportGenerator:
             debugger_model=html.escape(agent_info.get("debugger_model", "-")),
             assisted_fields=html.escape(agent_info.get("assisted_fields", "")),
             target_dir=html.escape(source_info.get("target_dir", "-")),
+            layout_config=html.escape(source_info.get("layout_config", "built-in defaults")),
             discovery_rule=html.escape(source_info.get("discovery_rule", "")),
             source_tree=html.escape(source_info.get("source_tree", "")),
             timestamp=datetime.now().strftime("%Y-%m-%d %H:%M:%S"),
@@ -811,6 +812,7 @@ _HTML_TEMPLATE = """\
       <h3>Target Layout</h3>
       <div class="source-lines">
         <div><strong>Target Dir</strong>: {target_dir}</div>
+        <div><strong>Layout Config</strong>: {layout_config}</div>
         <div><strong>Discovery</strong>: {discovery_rule}</div>
       </div>
       <div class="source-tree">{source_tree}</div>

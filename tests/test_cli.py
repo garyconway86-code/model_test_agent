@@ -10,6 +10,11 @@ from model_test_agent.state import ErrorEntry
 
 
 class TestCLIHelpers:
+    def test_parse_args_supports_target_layout_config(self, monkeypatch) -> None:
+        monkeypatch.setattr(sys, "argv", ["model-test-agent", "--target-layout-config", "/tmp/target_layout.yaml"])
+        args = _parse_args()
+        assert args.target_layout_config == "/tmp/target_layout.yaml"
+
     def test_parse_args_supports_skip_health_check(self, monkeypatch) -> None:
         monkeypatch.setattr(sys, "argv", ["model-test-agent", "--skip-health-check"])
         args = _parse_args()
@@ -116,6 +121,8 @@ class TestCLIHelpers:
                 str(tmp_path),
                 "--llm-config",
                 str(tmp_path / "llm.yaml"),
+                "--target-layout-config",
+                str(tmp_path / "target_layout.yaml"),
             ],
         )
         monkeypatch.setattr(cli, "_run_full_pipeline", lambda *args: captured.setdefault("args", args))
@@ -123,6 +130,7 @@ class TestCLIHelpers:
         cli.main()
 
         assert captured["args"][2] == str(tmp_path / "llm.yaml")
+        assert captured["args"][3] == str(tmp_path / "target_layout.yaml")
 
     def test_main_requires_target_dir_for_run(self, monkeypatch, tmp_path) -> None:
         captured = {}

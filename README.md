@@ -74,6 +74,9 @@ model-test-agent --target-dir ./Models_35 --locale en
 
 # 跳过启动前 LLM 健康检查
 model-test-agent --target-dir ./Models_35 --skip-health-check
+
+# 显式指定 target layout 配置
+model-test-agent --target-dir ./Models_35 --target-layout-config ./Models_35/target_layout.yaml
 ```
 
 ### 参数说明
@@ -81,6 +84,7 @@ model-test-agent --target-dir ./Models_35 --skip-health-check
 | 参数 | 默认值 | 说明 |
 |------|--------|------|
 | `--target-dir` | — | 目标目录路径。目录下每个一级子目录视为一个测试模型目录 |
+| `--target-layout-config` | 自动读取 `target-dir/target_layout.yaml` | 显式指定 target layout 配置文件 |
 | `--output` | `./output` | 报告和图表的输出目录 |
 | `--mode` | `full` | 运行模式：`full` 完整流程 / `classify` 仅分类 / `debug` 仅调试分析 / `snr` 仅 SNR 分析 |
 | `--auto-fix` | `false` | 自动在 Docker 中执行修复命令 |
@@ -105,6 +109,22 @@ model-test-agent \
 - 配置脚本（如 `model_config.yaml` / `config.yaml`）
 - `package_info.json`
 - 运行日志（递归查找 `.log`）
+
+如果你的目录结构不是默认样式，可以在 `target-dir` 下放一个 `target_layout.yaml`，或者通过 `--target-layout-config` 显式指定。示例：
+
+```yaml
+model_dir_pattern: "*"
+config_patterns:
+  - model_config.yaml
+  - config.yaml
+package_info_patterns:
+  - package_info.json
+log_dir_patterns:
+  - "*.log"
+latest_log_file: true
+```
+
+上面这个配置表示：如果模型目录里存在名字以 `.log` 结尾的目录，就从目录内部读取最新的日志文件。
 
 ### `python -m` 什么时候用
 

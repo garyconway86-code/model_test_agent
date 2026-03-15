@@ -17,7 +17,6 @@ as nodes, so they can also be invoked independently.
 
 from __future__ import annotations
 
-import glob
 import json
 from pathlib import Path
 from typing import Any
@@ -49,11 +48,14 @@ def _extract(state: AgentState) -> dict[str, Any]:
     """Node 1: extract errors from logs and load model configs."""
     target_dir = state.get("target_dir") or state.get("log_dir", "")
     config_path = state.get("config_path", "")
+    target_layout_path = state.get("target_layout_path", "")
 
     models: list[ModelInfo] = []
+    source_info: dict[str, str] = {}
     if target_dir:
         reader = ConfigReader()
-        models = reader.read_target_directory(target_dir)
+        models = reader.read_target_directory(target_dir, layout_path=target_layout_path)
+        source_info = reader.describe_target_layout(target_dir, layout_path=target_layout_path)
     elif config_path:
         reader = ConfigReader()
         models = reader.read_file(config_path)
@@ -63,12 +65,11 @@ def _extract(state: AgentState) -> dict[str, Any]:
     explicit_logs = [m for m in models if m.log_path]
     if explicit_logs:
         for model in explicit_logs:
-            for path in _expand_paths(model.log_path):
-                errors.extend(extractor.extract_from_file(path, model_name=model.name))
+            errors.extend(extractor.extract_from_file(model.log_path, model_name=model.name))
     elif target_dir:
         errors = extractor.extract_from_target_directory(target_dir)
 
-    return {"errors": errors, "models": models}
+    return {"errors": errors, "models": models, "source_info": source_info}
 
 
 def _save_history(state: AgentState) -> dict[str, Any]:
@@ -164,15 +165,17 @@ def _report(state: AgentState) -> dict[str, Any]:
         "failed_models": len(rows) - passed_models,
     }
     agent_info = _build_agent_info(state.get("llm_config_path", ""))
-    source_info = {
+    source_info = state.get("source_info") or {
         "target_dir": state.get("target_dir") or "-",
-        "discovery_rule": "1st-level subdirs => models; read model_config/config, package_info.json, and *.log",
+        "layout_config": "built-in defaults",
+        "discovery_rule": "1st-level subdirs => models; read model config, package info, and latest logs",
         "source_tree": (
             "target-dir/\n"
-            "  01-1_model/\n"
+            "  <model-dir>/\n"
             "    model_config.yaml\n"
             "    package_info.json\n"
-            "    runs/.../convert.log"
+            "    *.log/\n"
+            "      latest log file"
         ),
     }
 
@@ -236,15 +239,6 @@ def _summarize_fix_results(results: list[DebugResult], limit: int = 3) -> str:
         if len(statuses) >= limit:
             break
     return ", ".join(statuses)
-
-
-def _expand_paths(path_pattern: str) -> list[Path]:
-    if not any(token in path_pattern for token in "*?[]"):
-        path = Path(path_pattern)
-        return [path] if path.exists() else []
-    return [Path(match) for match in sorted(glob.glob(path_pattern)) if Path(match).is_file()]
-
-
 def _load_package_summary(model: ModelInfo | None) -> str:
     if not model:
         return ""

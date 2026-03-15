@@ -158,6 +158,42 @@ class TestConfigReader:
         assert models[0].name == "01-1_yolo"
         assert models[0].package_info_path.endswith("package_info.json")
 
+    def test_read_target_directory_uses_layout_config_and_latest_log_in_dot_log_dir(self, tmp_path: Path) -> None:
+        target_dir = tmp_path / "Models_35"
+        model_dir = target_dir / "01-1_yolo"
+        bundle_dir = model_dir / "convert.log"
+        nested_cfg = model_dir / "meta" / "model.yaml"
+        nested_pkg = model_dir / "meta" / "package_info.json"
+        older_log = bundle_dir / "20260313_100000.txt"
+        newer_log = bundle_dir / "20260314_100000.txt"
+
+        nested_cfg.parent.mkdir(parents=True)
+        bundle_dir.mkdir(parents=True)
+        nested_cfg.write_text("name: 01-1_yolo\nquantization: int8\n", encoding="utf-8")
+        nested_pkg.write_text('{"version": "1.0.0"}', encoding="utf-8")
+        older_log.write_text("[ERROR] old error\n", encoding="utf-8")
+        newer_log.write_text("[ERROR] new error\n", encoding="utf-8")
+        older_log.touch()
+        newer_log.touch()
+        (target_dir / "target_layout.yaml").write_text(
+            "config_patterns:\n"
+            "  - meta/model.yaml\n"
+            "package_info_patterns:\n"
+            "  - meta/package_info.json\n"
+            "log_dir_patterns:\n"
+            "  - '*.log'\n"
+            "log_file_patterns: []\n"
+            "latest_log_file: true\n",
+            encoding="utf-8",
+        )
+
+        models = ConfigReader.read_target_directory(target_dir)
+
+        assert len(models) == 1
+        assert models[0].config_path == str(nested_cfg.resolve())
+        assert models[0].package_info_path == str(nested_pkg.resolve())
+        assert models[0].log_path == str(newer_log.resolve())
+
     def test_read_file_resolves_relative_model_paths(self, tmp_path: Path) -> None:
         cfg = tmp_path / "models.yaml"
         cfg.write_text(

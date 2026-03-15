@@ -18,6 +18,20 @@ import yaml
 
 from model_test_agent.state import ModelInfo
 
+_DEFAULT_TARGET_LAYOUT: dict[str, Any] = {
+    "model_dir_pattern": "*",
+    "config_patterns": [
+        "model_config.yaml",
+        "model_config.yml",
+        "config.yaml",
+        "config.yml",
+    ],
+    "package_info_patterns": ["package_info.json"],
+    "log_file_patterns": ["*.log"],
+    "log_dir_patterns": ["*.log"],
+    "latest_log_file": True,
+}
+
 
 class ConfigReader:
     """Load model configurations from a YAML file or directory of YAML files.
@@ -69,31 +83,105 @@ class ConfigReader:
         return results
 
     @staticmethod
-    def read_target_directory(target_dir: str | Path) -> list[ModelInfo]:
+    def read_target_directory(
+        target_dir: str | Path,
+        layout_path: str | Path = "",
+    ) -> list[ModelInfo]:
         """Read one model config from each immediate child directory in *target_dir*."""
         results: list[ModelInfo] = []
         root = Path(target_dir)
-        for model_dir in sorted(path for path in root.iterdir() if path.is_dir()):
-            cfg_path = ConfigReader._find_model_config(model_dir)
+        layout = ConfigReader.load_target_layout(root, layout_path)
+        for model_dir in ConfigReader._iter_model_dirs(root, layout["model_dir_pattern"]):
+            cfg_path = ConfigReader._find_model_config(model_dir, layout["config_patterns"])
             if cfg_path:
                 models = ConfigReader.read_file(cfg_path)
             else:
                 models = [ModelInfo(name=model_dir.name)]
 
             for model in models:
-                package_info_path = model.package_info_path or str(model_dir / "package_info.json")
-                if not Path(package_info_path).exists():
-                    package_info_path = ""
+                package_info_path = ConfigReader._resolve_package_info_path(
+                    model_dir,
+                    model.package_info_path,
+                    layout["package_info_patterns"],
+                )
+                log_path = ConfigReader._resolve_log_path(
+                    model_dir,
+                    model.log_path,
+                    layout["log_file_patterns"],
+                    layout["log_dir_patterns"],
+                    layout["latest_log_file"],
+                )
                 results.append(ModelInfo(
                     name=model.name or model_dir.name,
                     quantization=model.quantization,
                     has_test_data=model.has_test_data,
                     config_path=model.config_path or str(cfg_path or ""),
-                    log_path=model.log_path,
+                    log_path=log_path,
                     package_info_path=package_info_path,
                     extra={**model.extra, "model_dir": str(model_dir.resolve())},
                 ))
         return results
+
+    @staticmethod
+    def load_target_layout(target_dir: str | Path, layout_path: str | Path = "") -> dict[str, Any]:
+        """Load target layout config or return defaults."""
+        path = ConfigReader._find_layout_path(Path(target_dir), Path(layout_path) if layout_path else None)
+        data: dict[str, Any] = {}
+        if path and path.exists():
+            with open(path, encoding="utf-8") as fh:
+                data = yaml.safe_load(fh) or {}
+
+        logs_cfg = data.get("logs", {}) if isinstance(data.get("logs"), dict) else {}
+        return {
+            "model_dir_pattern": str(data.get("model_dir_pattern") or _DEFAULT_TARGET_LAYOUT["model_dir_pattern"]),
+            "config_patterns": ConfigReader._as_patterns(
+                data.get("config_patterns"),
+                _DEFAULT_TARGET_LAYOUT["config_patterns"],
+            ),
+            "package_info_patterns": ConfigReader._as_patterns(
+                data.get("package_info_patterns"),
+                _DEFAULT_TARGET_LAYOUT["package_info_patterns"],
+            ),
+            "log_file_patterns": ConfigReader._as_patterns(
+                data.get("log_file_patterns", logs_cfg.get("file_patterns")),
+                _DEFAULT_TARGET_LAYOUT["log_file_patterns"],
+            ),
+            "log_dir_patterns": ConfigReader._as_patterns(
+                data.get("log_dir_patterns", logs_cfg.get("directory_patterns")),
+                _DEFAULT_TARGET_LAYOUT["log_dir_patterns"],
+            ),
+            "latest_log_file": bool(
+                data.get("latest_log_file", logs_cfg.get("latest_file", _DEFAULT_TARGET_LAYOUT["latest_log_file"]))
+            ),
+            "config_path": str(path.resolve()) if path and path.exists() else "",
+        }
+
+    @staticmethod
+    def describe_target_layout(target_dir: str | Path, layout_path: str | Path = "") -> dict[str, str]:
+        """Return a concise layout summary for the CLI and HTML report."""
+        layout = ConfigReader.load_target_layout(target_dir, layout_path)
+        config_label = layout["config_path"] or "built-in defaults"
+        log_mode = "latest file in matched .log dirs" if layout["latest_log_file"] else "all matched files"
+        source_tree = (
+            "target-dir/\n"
+            "  <model-dir>/\n"
+            f"    {layout['config_patterns'][0]}\n"
+            f"    {layout['package_info_patterns'][0]}\n"
+            "    *.log/\n"
+            "      latest log file"
+        )
+        return {
+            "target_dir": str(Path(target_dir).resolve()) if target_dir else "-",
+            "layout_config": config_label,
+            "discovery_rule": (
+                f"{layout['model_dir_pattern']} => models; "
+                f"config={', '.join(layout['config_patterns'])}; "
+                f"log_files={', '.join(layout['log_file_patterns'])}; "
+                f"log_dirs={', '.join(layout['log_dir_patterns'])}; "
+                f"pick={log_mode}"
+            ),
+            "source_tree": source_tree,
+        }
 
     # ------------------------------------------------------------------
 
@@ -152,20 +240,92 @@ class ConfigReader:
         return str((source_path.parent / path).resolve())
 
     @staticmethod
-    def _find_model_config(model_dir: Path) -> Path | None:
-        preferred = [
-            model_dir / "model_config.yaml",
-            model_dir / "model_config.yml",
-            model_dir / "config.yaml",
-            model_dir / "config.yml",
-        ]
+    def _find_model_config(model_dir: Path, config_patterns: list[str]) -> Path | None:
+        preferred = [model_dir / pattern for pattern in config_patterns if "/" not in pattern]
         for path in preferred:
             if path.exists():
                 return path
 
         candidates = [
-            path for pattern in ("*.yaml", "*.yml")
+            path
+            for pattern in config_patterns
             for path in sorted(model_dir.rglob(pattern))
-            if path.name != "package_info.json"
+            if path.is_file() and path.name != "package_info.json"
         ]
         return candidates[0] if candidates else None
+
+    @staticmethod
+    def _iter_model_dirs(root: Path, pattern: str) -> list[Path]:
+        if not root.exists():
+            return []
+        if pattern in {"", "*"}:
+            return sorted(path for path in root.iterdir() if path.is_dir())
+        return sorted(path for path in root.glob(pattern) if path.is_dir())
+
+    @staticmethod
+    def _resolve_package_info_path(model_dir: Path, explicit_path: str, patterns: list[str]) -> str:
+        if explicit_path:
+            path = Path(explicit_path)
+            return str(path.resolve()) if path.exists() else ""
+        for pattern in patterns:
+            for path in sorted(model_dir.rglob(pattern)):
+                if path.is_file():
+                    return str(path.resolve())
+        return ""
+
+    @staticmethod
+    def _resolve_log_path(
+        model_dir: Path,
+        explicit_path: str,
+        file_patterns: list[str],
+        dir_patterns: list[str],
+        latest_only: bool,
+    ) -> str:
+        if explicit_path:
+            resolved = ConfigReader._pick_latest_log_source(Path(explicit_path), latest_only)
+            return str(resolved.resolve()) if resolved else ""
+
+        candidates: list[Path] = []
+        for pattern in file_patterns:
+            candidates.extend(path for path in sorted(model_dir.rglob(pattern)) if path.is_file())
+        for pattern in dir_patterns:
+            for log_dir in sorted(model_dir.rglob(pattern)):
+                if log_dir.is_dir():
+                    candidates.extend(path for path in log_dir.rglob("*") if path.is_file())
+
+        chosen = ConfigReader._pick_latest(candidates) if latest_only else (sorted(candidates)[0] if candidates else None)
+        return str(chosen.resolve()) if chosen else ""
+
+    @staticmethod
+    def _pick_latest_log_source(path: Path, latest_only: bool) -> Path | None:
+        if not path.exists():
+            return None
+        if path.is_file():
+            return path
+        candidates = [candidate for candidate in path.rglob("*") if candidate.is_file()]
+        if not candidates:
+            return None
+        return ConfigReader._pick_latest(candidates) if latest_only else sorted(candidates)[0]
+
+    @staticmethod
+    def _pick_latest(paths: list[Path]) -> Path | None:
+        if not paths:
+            return None
+        return max(paths, key=lambda path: (path.stat().st_mtime, str(path)))
+
+    @staticmethod
+    def _find_layout_path(target_dir: Path, explicit_path: Path | None) -> Path | None:
+        if explicit_path:
+            return explicit_path
+        for candidate in (target_dir / "target_layout.yaml", target_dir / "target_layout.yml"):
+            if candidate.exists():
+                return candidate
+        return None
+
+    @staticmethod
+    def _as_patterns(value: Any, default: list[str]) -> list[str]:
+        if isinstance(value, str) and value.strip():
+            return [value.strip()]
+        if isinstance(value, list):
+            return [str(item).strip() for item in value if str(item).strip()]
+        return list(default)

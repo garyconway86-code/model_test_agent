@@ -218,7 +218,7 @@ class TestGraphConstruction:
 
         monkeypatch.setattr(
             "model_test_agent.graphs.main_graph.ConfigReader.read_target_directory",
-            lambda self, path: [
+            lambda self, path, layout_path="": [
                 ModelInfo(
                     name="01-1_yolo",
                     log_path=str(explicit_log),
@@ -235,3 +235,22 @@ class TestGraphConstruction:
 
         assert len(result["errors"]) == 1
         assert result["errors"][0].model_name == "01-1_yolo"
+
+    def test_extract_returns_layout_source_info(self, monkeypatch, tmp_path) -> None:
+        monkeypatch.setattr(
+            "model_test_agent.graphs.main_graph.ConfigReader.read_target_directory",
+            lambda self, path, layout_path="": [],
+        )
+        monkeypatch.setattr(
+            "model_test_agent.graphs.main_graph.ConfigReader.describe_target_layout",
+            lambda self, target_dir, layout_path="": {
+                "target_dir": str(tmp_path),
+                "layout_config": str(tmp_path / "target_layout.yaml"),
+                "discovery_rule": "demo rule",
+                "source_tree": "target-dir/\n  model/",
+            },
+        )
+
+        result = _extract({"target_dir": str(tmp_path), "target_layout_path": str(tmp_path / "target_layout.yaml")})
+
+        assert result["source_info"]["layout_config"].endswith("target_layout.yaml")

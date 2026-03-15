@@ -31,6 +31,7 @@ def _parse_args() -> argparse.Namespace:
     )
     parser.add_argument("--target-dir", type=str, help="目标目录路径（目录下每个子目录是一个测试模型）")
     parser.add_argument("--log-dir", type=str, help="日志目录路径（可替代 --target-dir）")
+    parser.add_argument("--target-layout-config", type=str, default=None, help="target-dir 布局配置文件路径")
     parser.add_argument("--output", type=str, default="./output", help="输出目录（默认: ./output）")
     parser.add_argument(
         "--mode",
@@ -155,6 +156,8 @@ def _step_snapshot_lines(step_key: str, state: dict) -> list[str]:
         lines = [
             f"input_dir: {source_dir or '-'}",
         ]
+        if state.get("target_layout_path"):
+            lines.append(f"layout_config: {state['target_layout_path']}")
         if model_dirs:
             lines.append(f"model_dirs: {', '.join(model_dirs)}")
         return lines
@@ -235,6 +238,7 @@ def _run_full_pipeline(
     target_dir: str,
     output_dir: str,
     llm_config_path: str,
+    target_layout_path: str,
     max_retries: int,
     auto_fix: bool,
     log_dir: str = "",
@@ -255,6 +259,7 @@ def _run_full_pipeline(
             "log_dir": log_dir,
             "output_dir": output_dir,
             "llm_config_path": llm_config_path,
+            "target_layout_path": target_layout_path,
             "auto_fix": auto_fix,
             "max_retries": max_retries,
             "retry_count": 0,
@@ -325,14 +330,20 @@ def _run_full_pipeline(
         ui.show_completion(report_path, report_html_path)
 
 
-def _run_classify_only(target_dir: str, output_dir: str, llm_config_path: str, log_dir: str = "") -> None:
+def _run_classify_only(
+    target_dir: str,
+    output_dir: str,
+    llm_config_path: str,
+    target_layout_path: str,
+    log_dir: str = "",
+) -> None:
     """Run only the classification subgraph."""
     from model_test_agent.graphs.classification_subgraph import build_classification_subgraph
     from model_test_agent.graphs.main_graph import _extract
 
     console.print(f"\n[bold blue]{t('step_extract')}...[/bold blue]")
-    _show_step_snapshot("extract", {"target_dir": target_dir, "log_dir": log_dir})
-    extracted = _extract({"target_dir": target_dir, "log_dir": log_dir})
+    _show_step_snapshot("extract", {"target_dir": target_dir, "target_layout_path": target_layout_path, "log_dir": log_dir})
+    extracted = _extract({"target_dir": target_dir, "target_layout_path": target_layout_path, "log_dir": log_dir})
     errors = extracted.get("errors", [])
     models = extracted.get("models", [])
     _show_step_snapshot("extract", extracted)
@@ -358,6 +369,7 @@ def _run_debug_only(
     target_dir: str,
     output_dir: str,
     llm_config_path: str,
+    target_layout_path: str,
     max_retries: int,
     auto_fix: bool,
     log_dir: str = "",
@@ -368,8 +380,8 @@ def _run_debug_only(
     from model_test_agent.graphs.main_graph import _extract
 
     console.print(f"\n[bold blue]{t('step_extract')}...[/bold blue]")
-    _show_step_snapshot("extract", {"target_dir": target_dir, "log_dir": log_dir})
-    extracted = _extract({"target_dir": target_dir, "log_dir": log_dir})
+    _show_step_snapshot("extract", {"target_dir": target_dir, "target_layout_path": target_layout_path, "log_dir": log_dir})
+    extracted = _extract({"target_dir": target_dir, "target_layout_path": target_layout_path, "log_dir": log_dir})
     errors = extracted.get("errors", [])
     models = extracted.get("models", [])
     _show_step_snapshot("extract", extracted)
@@ -405,12 +417,12 @@ def _run_debug_only(
         console.print(f"  [dim]图表: {', '.join(chart_paths)}[/dim]")
 
 
-def _run_snr_only(target_dir: str) -> None:
+def _run_snr_only(target_dir: str, target_layout_path: str = "") -> None:
     """Run only the SNR subgraph."""
     from model_test_agent.graphs.snr_subgraph import build_snr_subgraph
     from model_test_agent.tools.config_reader import ConfigReader
 
-    models = ConfigReader.read_target_directory(target_dir) if target_dir else []
+    models = ConfigReader.read_target_directory(target_dir, layout_path=target_layout_path) if target_dir else []
     if not models:
         console.print(f"[bold red]{t('error_no_target')}[/bold red]")
         return
@@ -496,6 +508,7 @@ def main() -> None:
             "log_dir": args.log_dir or "",
             "output_dir": args.output,
             "llm_config_path": args.llm_config or "",
+            "target_layout_path": args.target_layout_config or "",
             "mode": args.mode,
             "auto_fix": args.auto_fix,
         }
@@ -504,6 +517,7 @@ def main() -> None:
     log_dir = settings.get("log_dir", "")
     output_dir = settings["output_dir"]
     llm_config_path = settings.get("llm_config_path", "")
+    target_layout_path = settings.get("target_layout_path", "")
     mode = settings["mode"]
 
     input_dir = target_dir or log_dir
@@ -517,13 +531,29 @@ def main() -> None:
     Path(output_dir).mkdir(parents=True, exist_ok=True)
 
     if mode == "full":
-        _run_full_pipeline(target_dir, output_dir, llm_config_path, args.max_retries, settings["auto_fix"], log_dir)
+        _run_full_pipeline(
+            target_dir,
+            output_dir,
+            llm_config_path,
+            target_layout_path,
+            args.max_retries,
+            settings["auto_fix"],
+            log_dir,
+        )
     elif mode == "classify":
-        _run_classify_only(target_dir, output_dir, llm_config_path, log_dir)
+        _run_classify_only(target_dir, output_dir, llm_config_path, target_layout_path, log_dir)
     elif mode == "debug":
-        _run_debug_only(target_dir, output_dir, llm_config_path, args.max_retries, settings["auto_fix"], log_dir)
+        _run_debug_only(
+            target_dir,
+            output_dir,
+            llm_config_path,
+            target_layout_path,
+            args.max_retries,
+            settings["auto_fix"],
+            log_dir,
+        )
     elif mode == "snr":
-        _run_snr_only(target_dir)
+        _run_snr_only(target_dir, target_layout_path)
 
 
 if __name__ == "__main__":
