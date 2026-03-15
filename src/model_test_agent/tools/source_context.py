@@ -3,7 +3,11 @@
 from __future__ import annotations
 
 import re
+import shlex
 from pathlib import Path
+
+from model_test_agent.debug_config import load_debug_settings
+from model_test_agent.tools.docker_executor import DockerExecutor
 
 
 _LOCATION_PATTERNS = [
@@ -23,9 +27,16 @@ _SOURCE_NOT_FOUND = "源码未找到，请仅根据日志推理"
 class SourceContextResolver:
     """Resolve log-referenced source files and load surrounding lines."""
 
-    def __init__(self, codebase_root: str | Path = "", context_lines: int = 15) -> None:
+    def __init__(
+        self,
+        codebase_root: str | Path = "",
+        context_lines: int | None = None,
+        docker_script_path: str | Path = "",
+    ) -> None:
+        settings = load_debug_settings()
         self.codebase_root = Path(codebase_root).resolve() if codebase_root else None
-        self.context_lines = context_lines
+        self.context_lines = context_lines or settings.source_context.context_lines
+        self.docker_script_path = Path(docker_script_path).resolve() if docker_script_path else None
 
     def extract_error_location(self, text: str) -> tuple[str, int]:
         """Return the best-effort `(file_path, line_num)` extracted from the log."""
@@ -47,9 +58,16 @@ class SourceContextResolver:
             return _SOURCE_NOT_FOUND
 
         resolved = self._resolve_source_path(file_path)
-        if resolved is None:
-            return _SOURCE_NOT_FOUND
+        if resolved is not None:
+            return self._read_local_context(resolved, line_num)
 
+        container_context = self._read_container_context(file_path, line_num)
+        if container_context:
+            return container_context
+
+        return _SOURCE_NOT_FOUND
+
+    def _read_local_context(self, resolved: Path, line_num: int) -> str:
         try:
             lines = resolved.read_text(encoding="utf-8", errors="replace").splitlines()
         except OSError:
@@ -69,7 +87,27 @@ class SourceContextResolver:
 
     def describe_codebase_root(self) -> str:
         """Return the active codebase root for UI display."""
+        if self.docker_script_path:
+            if self.codebase_root:
+                return f"{self.codebase_root} (docker fallback: {self.docker_script_path.name})"
+            return f"docker script: {self.docker_script_path}"
         return str(self.codebase_root) if self.codebase_root else "current runtime"
+
+    def _read_container_context(self, file_path: str, line_num: int) -> str:
+        if not self.docker_script_path:
+            return ""
+        target_line = line_num or 1
+        start = max(1, target_line - self.context_lines)
+        end = target_line + self.context_lines
+        command = (
+            f"if [ ! -f {shlex.quote(file_path)} ]; then exit 44; fi; "
+            f"awk 'NR>={start} && NR<={end} {{printf(\"%s %5d | %s\\n\", (NR=={target_line}?\">>\":\"  \"), NR, $0)}}' "
+            f"{shlex.quote(file_path)}"
+        )
+        result = DockerExecutor(docker_script_path=str(self.docker_script_path)).run(command)
+        if result.success and result.stdout.strip():
+            return result.stdout.strip()
+        return ""
 
     def _resolve_source_path(self, file_path: str) -> Path | None:
         raw = Path(file_path)

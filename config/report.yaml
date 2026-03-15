@@ -21,6 +21,9 @@ xlsx:
     - key: has_test_data
       header: "Has Test Data"
       width: 13
+    - key: config_hints
+      header: "Config Hints"
+      width: 24
     - key: error_category
       header: "Error Category"
       width: 18
@@ -42,6 +45,9 @@ xlsx:
     - key: status
       header: "Status"
       width: 12
+    - key: comment
+      header: "Comment"
+      width: 28
 
   # Style
   header_fill_color: "1F4E79"

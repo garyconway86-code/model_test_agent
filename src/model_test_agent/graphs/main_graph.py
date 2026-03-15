@@ -2,7 +2,7 @@
 
     ┌──────────────────┐    ┌──────────────────┐    ┌──────────────────┐
     │  extract          │───▶│  classification   │───▶│  debug            │
-    │  (logs + config)  │    │  (Subgraph)       │    │  (Subgraph+retry) │
+    │  (target-dir)     │    │  (Subgraph)       │    │  (Subgraph+retry) │
     └──────────────────┘    └──────────────────┘    └──────────────────┘
                                                               │
                                                               ▼
@@ -47,8 +47,7 @@ from model_test_agent.tools.source_context import SourceContextResolver
 
 def _extract(state: AgentState) -> dict[str, Any]:
     """Node 1: extract errors from logs and load model configs."""
-    target_dir = state.get("target_dir") or state.get("log_dir", "")
-    config_path = state.get("config_path", "")
+    target_dir = state.get("target_dir", "")
     target_layout_path = state.get("target_layout_path", "")
 
     models: list[ModelInfo] = []
@@ -57,9 +56,6 @@ def _extract(state: AgentState) -> dict[str, Any]:
         reader = ConfigReader()
         models = reader.read_target_directory(target_dir, layout_path=target_layout_path)
         source_info = reader.describe_target_layout(target_dir, layout_path=target_layout_path)
-    elif config_path:
-        reader = ConfigReader()
-        models = reader.read_file(config_path)
 
     extractor = LogExtractor()
     errors: list[ErrorEntry] = []
@@ -76,7 +72,10 @@ def _extract(state: AgentState) -> dict[str, Any]:
 def _enrich_source_context(state: AgentState) -> dict[str, Any]:
     """Resolve source file locations from logs and load nearby code context."""
     errors = state.get("errors", [])
-    resolver = SourceContextResolver(codebase_root=state.get("codebase_root", ""))
+    resolver = SourceContextResolver(
+        codebase_root=state.get("codebase_root", ""),
+        docker_script_path=state.get("docker_script_path", ""),
+    )
     for err in errors:
         file_path, line_num = resolver.extract_error_location(err.raw_context or err.message)
         err.error_file_path = file_path
@@ -141,6 +140,7 @@ def _report(state: AgentState) -> dict[str, Any]:
                 package_summary=_load_package_summary(m),
                 quantization=m.quantization if m else "",
                 has_test_data="是" if (m and m.has_test_data) else "否",
+                config_hints=_config_hints(m),
                 error_category="no_error",
                 error_count=0,
                 key_log_snippet="No error detected",
@@ -164,6 +164,7 @@ def _report(state: AgentState) -> dict[str, Any]:
             package_summary=_load_package_summary(m),
             quantization=m.quantization if m else "",
             has_test_data="是" if (m and m.has_test_data) else "否",
+            config_hints=_config_hints(m),
             error_category=", ".join(categories) or "unknown",
             error_count=len(errs),
             key_log_snippet=_summarize_error_messages(errs),
@@ -185,13 +186,13 @@ def _report(state: AgentState) -> dict[str, Any]:
     source_info = state.get("source_info") or {
         "target_dir": state.get("target_dir") or "-",
         "layout_config": "built-in defaults",
-        "discovery_rule": "1st-level subdirs => models; read model config, package info, and latest logs",
+        "discovery_rule": "{model_name}.yaml + package_info.json + latest file in Converter_result/convert/.log",
         "source_tree": (
             "target-dir/\n"
             "  <model-dir>/\n"
-            "    model_config.yaml\n"
+            "    <model-name>.yaml\n"
             "    package_info.json\n"
-            "    *.log/\n"
+            "    Converter_result/convert/.log/\n"
             "      latest log file"
         ),
     }
@@ -237,7 +238,7 @@ def _summarize_suggested_fixes(results: list[DebugResult], limit: int = 3) -> st
         suggestion = result.suggested_fix.strip()
         if not suggestion:
             continue
-        label = f"{result.error_category}: {suggestion[:120]}"
+        label = f"{result.error_category}: {suggestion}"
         if label not in suggestions:
             suggestions.append(label)
         if len(suggestions) >= limit:
@@ -281,6 +282,23 @@ def _load_package_summary(model: ModelInfo | None) -> str:
     if commit:
         parts.append(f"commit {str(commit)[:8]}")
     return " | ".join(parts)
+
+
+def _config_hints(model: ModelInfo | None, limit: int = 4) -> str:
+    if not model:
+        return ""
+    files = model.extra.get("config_context_files", [])
+    model_dir = Path(str(model.extra.get("model_dir", ""))) if model.extra.get("model_dir") else None
+    labels: list[str] = []
+    for file_path in files[:limit]:
+        path = Path(str(file_path))
+        try:
+            label = str(path.relative_to(model_dir)) if model_dir else path.name
+        except ValueError:
+            label = path.name
+        if label not in labels:
+            labels.append(label)
+    return " | ".join(labels)
 
 
 def _default_package_info_path(config_path: str) -> str:

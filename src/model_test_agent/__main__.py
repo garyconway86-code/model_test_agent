@@ -46,9 +46,10 @@ def _parse_args() -> argparse.Namespace:
         description="模型转换测试分析 Agent — 自动化错误分析与修复建议",
     )
     parser.add_argument("--target-dir", type=str, help="目标目录路径（目录下每个子目录是一个测试模型）")
-    parser.add_argument("--log-dir", type=str, help="日志目录路径（可替代 --target-dir）")
     parser.add_argument("--target-layout-config", type=str, default=None, help="target-dir 布局配置文件路径")
     parser.add_argument("--codebase-root", type=str, default=None, help="源码根目录（用于提取报错源码上下文）")
+    parser.add_argument("--docker-script", type=str, default=None, help="进入 Docker 环境的脚本路径（用于读取源码或执行修复命令）")
+    parser.add_argument("--rag-dir", type=str, default=None, help="本地知识目录（txt/md/json/csv/xlsx）")
     parser.add_argument("--output", type=str, default="./output", help="输出目录（默认: ./output）")
     parser.add_argument(
         "--mode",
@@ -64,6 +65,10 @@ def _parse_args() -> argparse.Namespace:
     parser.add_argument("--skip-health-check", action="store_true", help="跳过启动前 LLM 预检")
     parser.add_argument("--show-graph", action="store_true", help="显示工作流图结构后退出")
     parser.add_argument("--export-graph", type=str, default=None, help="导出工作流图到文件（.md 或 .png）")
+    parser.add_argument("--serve-report", type=str, default=None, help="启动本地共享评注服务，参数为 HTML 报告路径")
+    parser.add_argument("--serve-port", type=int, default=7860, help="共享评注服务端口（默认: 7860）")
+    parser.add_argument("--ui", action="store_true", help="启动远端友好的 Web UI")
+    parser.add_argument("--ui-port", type=int, default=7860, help="Web UI 端口（默认: 7860）")
     return parser.parse_args()
 
 
@@ -95,6 +100,8 @@ def _interactive_setup() -> dict:
         "llm_config_path": "",
         "target_layout_path": "",
         "codebase_root": "",
+        "docker_script_path": "",
+        "rag_dir": "",
         "mode": mode,
         "auto_fix": auto_fix,
     }
@@ -167,13 +174,17 @@ def _format_error_sample(err) -> str:
 
 def _step_snapshot_lines(step_key: str, state: dict) -> list[str]:
     if step_key == "extract" and "errors" not in state and "models" not in state:
-        source_dir = Path(state.get("target_dir") or state.get("log_dir", ""))
+        source_dir = Path(state.get("target_dir", ""))
         model_dirs = [p.name for p in sorted(path for path in source_dir.iterdir() if path.is_dir())[:4]] if source_dir.is_dir() else []
         lines = [
             f"input_dir: {source_dir or '-'}",
         ]
         if state.get("target_layout_path"):
             lines.append(f"layout_config: {state['target_layout_path']}")
+        if state.get("docker_script_path"):
+            lines.append(f"docker_script: {state['docker_script_path']}")
+        if state.get("rag_dir"):
+            lines.append(f"rag_dir: {state['rag_dir']}")
         if model_dirs:
             lines.append(f"model_dirs: {', '.join(model_dirs)}")
         return lines
@@ -224,6 +235,8 @@ def _step_snapshot_lines(step_key: str, state: dict) -> list[str]:
         ]
         if state.get("codebase_root"):
             lines.append(f"codebase_root: {state['codebase_root']}")
+        if state.get("docker_script_path"):
+            lines.append(f"docker_script: {state['docker_script_path']}")
         if resolved:
             lines.append("source_samples:")
             lines.extend(
@@ -270,7 +283,8 @@ def _extract_with_source_context(
     target_dir: str,
     target_layout_path: str,
     codebase_root: str,
-    log_dir: str = "",
+    docker_script_path: str,
+    rag_dir: str,
 ) -> dict:
     """Run extract + source context enrichment for direct CLI modes."""
     from model_test_agent.graphs.main_graph import _enrich_source_context, _extract
@@ -279,7 +293,8 @@ def _extract_with_source_context(
         "target_dir": target_dir,
         "target_layout_path": target_layout_path,
         "codebase_root": codebase_root,
-        "log_dir": log_dir,
+        "docker_script_path": docker_script_path,
+        "rag_dir": rag_dir,
     }
     extracted = _extract(initial_state)
     extracted.update(_enrich_source_context({**initial_state, **extracted}))
@@ -303,17 +318,35 @@ def _show_direct_extract_flow(
     target_dir: str,
     target_layout_path: str,
     codebase_root: str,
-    log_dir: str = "",
+    docker_script_path: str,
+    rag_dir: str,
 ) -> dict:
     """Display extract/source-context stages for classify/debug-only modes."""
     console.print(f"\n[bold blue]{t('step_extract')}...[/bold blue]")
     _show_step_snapshot(
         "extract",
-        {"target_dir": target_dir, "target_layout_path": target_layout_path, "log_dir": log_dir},
+        {
+            "target_dir": target_dir,
+            "target_layout_path": target_layout_path,
+            "rag_dir": rag_dir,
+        },
     )
-    extracted = _extract_with_source_context(target_dir, target_layout_path, codebase_root, log_dir)
+    extracted = _extract_with_source_context(
+        target_dir,
+        target_layout_path,
+        codebase_root,
+        docker_script_path,
+        rag_dir,
+    )
     _show_step_snapshot("extract", extracted)
-    _show_step_snapshot("source_context", {"errors": extracted.get("errors", []), "codebase_root": codebase_root})
+    _show_step_snapshot(
+        "source_context",
+        {
+            "errors": extracted.get("errors", []),
+            "codebase_root": codebase_root,
+            "docker_script_path": docker_script_path,
+        },
+    )
     return extracted
 
 
@@ -323,9 +356,10 @@ def _run_full_pipeline(
     llm_config_path: str,
     target_layout_path: str,
     codebase_root: str,
+    docker_script_path: str,
+    rag_dir: str,
     max_retries: int,
     auto_fix: bool,
-    log_dir: str = "",
 ) -> None:
     """Execute the complete LangGraph pipeline with live progress."""
     progress = ui.create_progress()
@@ -340,11 +374,12 @@ def _run_full_pipeline(
 
         initial_state = {
             "target_dir": target_dir,
-            "log_dir": log_dir,
             "output_dir": output_dir,
             "llm_config_path": llm_config_path,
             "target_layout_path": target_layout_path,
             "codebase_root": codebase_root,
+            "docker_script_path": docker_script_path,
+            "rag_dir": rag_dir,
             "auto_fix": auto_fix,
             "max_retries": max_retries,
             "retry_count": 0,
@@ -421,10 +456,17 @@ def _run_classify_only(
     llm_config_path: str,
     target_layout_path: str,
     codebase_root: str,
-    log_dir: str = "",
+    docker_script_path: str,
+    rag_dir: str,
 ) -> None:
     """Run only the classification subgraph."""
-    extracted = _show_direct_extract_flow(target_dir, target_layout_path, codebase_root, log_dir)
+    extracted = _show_direct_extract_flow(
+        target_dir,
+        target_layout_path,
+        codebase_root,
+        docker_script_path,
+        rag_dir,
+    )
     errors = extracted.get("errors", [])
     models = extracted.get("models", [])
 
@@ -445,14 +487,21 @@ def _run_debug_only(
     llm_config_path: str,
     target_layout_path: str,
     codebase_root: str,
+    docker_script_path: str,
+    rag_dir: str,
     max_retries: int,
     auto_fix: bool,
-    log_dir: str = "",
 ) -> None:
     """Run classification + debug subgraph (skip reporting)."""
     from model_test_agent.graphs.debug_subgraph import build_debug_subgraph
 
-    extracted = _show_direct_extract_flow(target_dir, target_layout_path, codebase_root, log_dir)
+    extracted = _show_direct_extract_flow(
+        target_dir,
+        target_layout_path,
+        codebase_root,
+        docker_script_path,
+        rag_dir,
+    )
     errors = extracted.get("errors", [])
     models = extracted.get("models", [])
 
@@ -470,6 +519,8 @@ def _run_debug_only(
         "max_retries": max_retries,
         "auto_fix": auto_fix,
         "llm_config_path": llm_config_path,
+        "rag_dir": rag_dir,
+        "docker_script_path": docker_script_path,
     })
     _show_step_snapshot("debug", {"debug_results": dbg_result.get("debug_results", [])})
 
@@ -525,9 +576,64 @@ def _generate_charts(
     return paths
 
 
+def _serve_report(report_path: str, port: int) -> None:
+    from model_test_agent.tools.report_server import create_report_server
+
+    server_info = create_report_server(report_path, port=port)
+    console.print()
+    console.print(f"[bold green]共享评注服务已启动[/bold green]")
+    console.print(f"  Report: [underline]{server_info.report_url}[/underline]")
+    console.print(f"  Review State: [underline]{server_info.review_state_path}[/underline]")
+    console.print("  按 Ctrl+C 停止服务")
+    try:
+        server_info.server.serve_forever()
+    except KeyboardInterrupt:
+        console.print("\n[dim]共享评注服务已停止[/dim]")
+    finally:
+        server_info.server.server_close()
+
+
+def _serve_ui(port: int, defaults: dict[str, str]) -> None:
+    from model_test_agent.ui.server import create_ui_server
+
+    server_info = create_ui_server(port=port, defaults=defaults)
+    console.print()
+    console.print(f"[bold green]Web UI 已启动[/bold green]")
+    console.print(f"  URL: [underline]{server_info.base_url}[/underline]")
+    console.print("  提示: 远端服务器可通过 SSH 隧道访问，例如 ssh -L 7860:127.0.0.1:7860 user@host")
+    console.print("  按 Ctrl+C 停止服务")
+    try:
+        server_info.server.serve_forever()
+    except KeyboardInterrupt:
+        console.print("\n[dim]Web UI 已停止[/dim]")
+    finally:
+        server_info.server.server_close()
+
+
 def main() -> None:
     args = _parse_args()
     load_strings(locale=args.locale)
+
+    if args.serve_report:
+        _serve_report(args.serve_report, args.serve_port)
+        return
+
+    if args.ui:
+        _serve_ui(
+            args.ui_port,
+            {
+                "target_dir": args.target_dir or "",
+                "output_dir": args.output,
+                "llm_config_path": args.llm_config or "",
+                "target_layout_path": args.target_layout_config or "",
+                "codebase_root": args.codebase_root or "",
+                "docker_script_path": args.docker_script or "",
+                "rag_dir": args.rag_dir or "",
+                "max_retries": str(args.max_retries),
+                "auto_fix": "1" if args.auto_fix else "",
+            },
+        )
+        return
 
     # --check-api: health-check all LLM profiles and exit
     if args.check_api:
@@ -564,31 +670,32 @@ def main() -> None:
         return
 
     # If no target-dir is provided, enter interactive mode
-    if not args.target_dir and not args.log_dir:
+    if not args.target_dir:
         settings = _interactive_setup()
     else:
         settings = {
             "target_dir": args.target_dir or "",
-            "log_dir": args.log_dir or "",
             "output_dir": args.output,
             "llm_config_path": args.llm_config or "",
             "target_layout_path": args.target_layout_config or "",
             "codebase_root": args.codebase_root or "",
+            "docker_script_path": args.docker_script or "",
+            "rag_dir": args.rag_dir or "",
             "mode": args.mode,
             "auto_fix": args.auto_fix,
         }
 
     target_dir = settings.get("target_dir", "")
-    log_dir = settings.get("log_dir", "")
     output_dir = settings["output_dir"]
     llm_config_path = settings.get("llm_config_path", "")
     target_layout_path = settings.get("target_layout_path", "")
     codebase_root = settings.get("codebase_root", "")
+    docker_script_path = settings.get("docker_script_path", "")
+    rag_dir = settings.get("rag_dir", "")
     mode = settings["mode"]
 
-    input_dir = target_dir or log_dir
-    if not input_dir or not Path(input_dir).is_dir():
-        console.print(f"[bold red]{t('error_no_target')}: {input_dir or '-'}[/bold red]")
+    if not target_dir or not Path(target_dir).is_dir():
+        console.print(f"[bold red]{t('error_no_target')}: {target_dir or '-'}[/bold red]")
         sys.exit(1)
     if mode == "snr" and not target_dir:
         console.print("[bold red]SNR 模式需要 --target-dir[/bold red]")
@@ -603,12 +710,21 @@ def main() -> None:
             llm_config_path,
             target_layout_path,
             codebase_root,
+            docker_script_path,
+            rag_dir,
             args.max_retries,
             settings["auto_fix"],
-            log_dir,
         )
     elif mode == "classify":
-        _run_classify_only(target_dir, output_dir, llm_config_path, target_layout_path, codebase_root, log_dir)
+        _run_classify_only(
+            target_dir,
+            output_dir,
+            llm_config_path,
+            target_layout_path,
+            codebase_root,
+            docker_script_path,
+            rag_dir,
+        )
     elif mode == "debug":
         _run_debug_only(
             target_dir,
@@ -616,9 +732,10 @@ def main() -> None:
             llm_config_path,
             target_layout_path,
             codebase_root,
+            docker_script_path,
+            rag_dir,
             args.max_retries,
             settings["auto_fix"],
-            log_dir,
         )
     elif mode == "snr":
         _run_snr_only(target_dir, target_layout_path)

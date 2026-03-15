@@ -11,6 +11,7 @@ import json
 import re
 from typing import Any
 
+from model_test_agent.debug_config import load_debug_settings
 from model_test_agent.skills.base import BaseSkill
 from model_test_agent.state import DebugResult, ErrorEntry, FixStatus, ModelInfo
 
@@ -65,9 +66,17 @@ class DebugAnalyzerSkill(BaseSkill):
         Maximum error samples per category sent to LLM.
     """
 
-    def __init__(self, llm_profile: str = "debugger", max_samples: int = 5, **kwargs: Any) -> None:
+    def __init__(self, llm_profile: str = "debugger", max_samples: int | None = None, **kwargs: Any) -> None:
         super().__init__(llm_profile=llm_profile, **kwargs)
-        self.max_samples = max_samples
+        settings = load_debug_settings()
+        budget = settings.prompt_budget
+        self.max_samples = max_samples or budget.max_error_samples
+        self.max_log_chars = budget.max_log_chars_per_sample
+        self.max_source_chars = budget.max_source_chars_per_sample
+        self.max_config_chars_per_model = budget.max_config_chars_per_model
+        self.max_config_chars_per_file = budget.max_config_chars_per_file
+        self.max_history_items = budget.max_history_items
+        self.max_history_excerpt_chars = budget.max_history_excerpt_chars
 
     def run(
         self,
@@ -105,6 +114,9 @@ class DebugAnalyzerSkill(BaseSkill):
                     f"- {m.name}: quantization={m.quantization}, "
                     f"has_test_data={m.has_test_data}"
                 )
+                config_context = self._format_model_config(m)
+                if config_context:
+                    model_lines.append(config_context)
             else:
                 model_lines.append(f"- {name}")
         model_info = "\n".join(model_lines) if model_lines else "无"
@@ -115,9 +127,9 @@ class DebugAnalyzerSkill(BaseSkill):
         for i, err in enumerate(samples):
             sample_lines.append(
                 f"### 样本 {i + 1}（{err.model_name}，日志行 {err.line_number}）\n"
-                f"日志上下文:\n{err.raw_context[:600]}\n\n"
+                f"日志上下文:\n{err.raw_context[:self.max_log_chars]}\n\n"
                 f"源码定位: {err.error_file_path}:{err.error_line_num or '?'}\n"
-                f"源码上下文:\n{err.source_code_context[:1200]}"
+                f"源码上下文:\n{err.source_code_context[:self.max_source_chars]}"
             )
         error_samples = "\n\n".join(sample_lines)
 
@@ -125,16 +137,23 @@ class DebugAnalyzerSkill(BaseSkill):
         relevant_history = history_cases
         if relevant_history:
             history_lines = []
-            for c in relevant_history[:3]:
-                history_lines.append(
-                    f"- [{c.get('id', '?')}] model={c.get('model_name')}, "
-                    f"原因: {c.get('root_cause', '?')}, "
-                    f"方案: {c.get('solution', '?')}, "
-                    f"有效: {'是' if c.get('effective') else '否'}"
-                )
+            for c in relevant_history[: self.max_history_items]:
+                if c.get("kind") == "document":
+                    history_lines.append(
+                        f"- [doc] source={c.get('source', '?')}, "
+                        f"title={c.get('title', '?')}, "
+                        f"摘录: {c.get('excerpt', '')[: self.max_history_excerpt_chars]}"
+                    )
+                else:
+                    history_lines.append(
+                        f"- [{c.get('id', '?')}] model={c.get('model_name')}, "
+                        f"原因: {str(c.get('root_cause', '?'))[: self.max_history_excerpt_chars]}, "
+                        f"方案: {str(c.get('solution', '?'))[: self.max_history_excerpt_chars]}, "
+                        f"有效: {'是' if c.get('effective') else '否'}"
+                    )
             history_context = "\n".join(history_lines)
         else:
-            history_context = "无相关历史案例"
+            history_context = "无相关历史案例或外部知识"
 
         # Find history match
         history_match_id = relevant_history[0]["id"] if relevant_history else ""
@@ -185,3 +204,32 @@ class DebugAnalyzerSkill(BaseSkill):
         except json.JSONDecodeError:
             pass
         return {"root_cause": text}
+
+    def _format_model_config(self, model: ModelInfo) -> str:
+        summary = str(model.extra.get("config_context", "")).strip()
+        if not summary:
+            return ""
+
+        trimmed_sections: list[str] = []
+        total_chars = 0
+        for section in summary.split("\n\n"):
+            piece = section[: self.max_config_chars_per_file].strip()
+            if not piece:
+                continue
+            projected = total_chars + len(piece) + (2 if trimmed_sections else 0)
+            if projected > self.max_config_chars_per_model:
+                remaining = self.max_config_chars_per_model - total_chars
+                if remaining > 24:
+                    trimmed_sections.append(piece[:remaining].rstrip())
+                break
+            trimmed_sections.append(piece)
+            total_chars = projected
+
+        if not trimmed_sections:
+            return ""
+
+        rendered_lines = ["  config_context:"]
+        for block in trimmed_sections:
+            rendered_lines.extend(f"  {line}" for line in block.splitlines())
+            rendered_lines.append("")
+        return "\n".join(rendered_lines[:-1])

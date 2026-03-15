@@ -21,14 +21,20 @@ from model_test_agent.state import ModelInfo
 _DEFAULT_TARGET_LAYOUT: dict[str, Any] = {
     "model_dir_pattern": "*",
     "config_patterns": [
-        "model_config.yaml",
-        "model_config.yml",
+        "{model_name}.yaml",
+        "{model_name}.yml",
         "config.yaml",
         "config.yml",
     ],
+    "config_context_patterns": [
+        "{model_name}.yaml",
+        "{model_name}.yml",
+        "Config/legacy.yaml",
+    ],
+    "config_context_max_files": 4,
     "package_info_patterns": ["package_info.json"],
-    "log_file_patterns": ["*.log"],
-    "log_dir_patterns": ["*.log"],
+    "log_file_patterns": [],
+    "log_dir_patterns": ["Converter_result/convert/.log", "*.log"],
     "latest_log_file": True,
 }
 
@@ -111,6 +117,12 @@ class ConfigReader:
                     layout["log_dir_patterns"],
                     layout["latest_log_file"],
                 )
+                config_context = ConfigReader._build_config_context(
+                    model_dir,
+                    primary_config_path=model.config_path or str(cfg_path or ""),
+                    patterns=layout["config_context_patterns"],
+                    max_files=layout["config_context_max_files"],
+                )
                 results.append(ModelInfo(
                     name=model.name or model_dir.name,
                     quantization=model.quantization,
@@ -118,7 +130,12 @@ class ConfigReader:
                     config_path=model.config_path or str(cfg_path or ""),
                     log_path=log_path,
                     package_info_path=package_info_path,
-                    extra={**model.extra, "model_dir": str(model_dir.resolve())},
+                    extra={
+                        **model.extra,
+                        "model_dir": str(model_dir.resolve()),
+                        "config_context": config_context["summary"],
+                        "config_context_files": config_context["files"],
+                    },
                 ))
         return results
 
@@ -142,6 +159,14 @@ class ConfigReader:
                 data.get("package_info_patterns"),
                 _DEFAULT_TARGET_LAYOUT["package_info_patterns"],
             ),
+            "config_context_patterns": ConfigReader._as_patterns(
+                data.get("config_context_patterns"),
+                _DEFAULT_TARGET_LAYOUT["config_context_patterns"],
+            ),
+            "config_context_max_files": ConfigReader._as_positive_int(
+                data.get("config_context_max_files"),
+                _DEFAULT_TARGET_LAYOUT["config_context_max_files"],
+            ),
             "log_file_patterns": ConfigReader._as_patterns(
                 data.get("log_file_patterns", logs_cfg.get("file_patterns")),
                 _DEFAULT_TARGET_LAYOUT["log_file_patterns"],
@@ -162,12 +187,21 @@ class ConfigReader:
         layout = ConfigReader.load_target_layout(target_dir, layout_path)
         config_label = layout["config_path"] or "built-in defaults"
         log_mode = "latest file in matched .log dirs" if layout["latest_log_file"] else "all matched files"
+        config_example = ConfigReader._render_pattern_example(layout["config_patterns"][0]) if layout["config_patterns"] else "<model-name>.yaml"
+        config_context_example = (
+            ConfigReader._render_pattern_example(layout["config_context_patterns"][0])
+            if layout["config_context_patterns"]
+            else "Config/legacy.yaml"
+        )
+        package_example = ConfigReader._render_pattern_example(layout["package_info_patterns"][0]) if layout["package_info_patterns"] else "package_info.json"
+        log_dir_example = ConfigReader._render_pattern_example(layout["log_dir_patterns"][0]) if layout["log_dir_patterns"] else ".log"
         source_tree = (
             "target-dir/\n"
             "  <model-dir>/\n"
-            f"    {layout['config_patterns'][0]}\n"
-            f"    {layout['package_info_patterns'][0]}\n"
-            "    *.log/\n"
+            f"    {config_example}\n"
+            f"    {config_context_example}\n"
+            f"    {package_example}\n"
+            f"    {log_dir_example}/\n"
             "      latest log file"
         )
         return {
@@ -176,6 +210,7 @@ class ConfigReader:
             "discovery_rule": (
                 f"{layout['model_dir_pattern']} => models; "
                 f"config={', '.join(layout['config_patterns'])}; "
+                f"config_context={', '.join(layout['config_context_patterns'])}; "
                 f"log_files={', '.join(layout['log_file_patterns'])}; "
                 f"log_dirs={', '.join(layout['log_dir_patterns'])}; "
                 f"pick={log_mode}"
@@ -240,16 +275,61 @@ class ConfigReader:
         return str((source_path.parent / path).resolve())
 
     @staticmethod
+    def _build_config_context(
+        model_dir: Path,
+        primary_config_path: str,
+        patterns: list[str],
+        max_files: int,
+    ) -> dict[str, Any]:
+        files: list[Path] = []
+        seen: set[str] = set()
+
+        def _add(path: Path) -> None:
+            resolved = path.resolve()
+            key = str(resolved)
+            if key in seen or not resolved.exists() or not resolved.is_file():
+                return
+            seen.add(key)
+            files.append(resolved)
+
+        if primary_config_path:
+            _add(Path(primary_config_path))
+
+        for pattern in ConfigReader._expand_patterns(patterns, model_dir.name):
+            for path in ConfigReader._iter_pattern_matches(model_dir, pattern):
+                _add(path)
+                if len(files) >= max_files:
+                    break
+            if len(files) >= max_files:
+                break
+
+        summary_parts: list[str] = []
+        for path in files[:max_files]:
+            try:
+                text = path.read_text(encoding="utf-8", errors="replace").strip()
+            except OSError:
+                continue
+            if not text:
+                continue
+            summary_parts.append(f"[{path.relative_to(model_dir)}]\n{text}")
+
+        return {
+            "files": [str(path) for path in files[:max_files]],
+            "summary": "\n\n".join(summary_parts),
+        }
+
+    @staticmethod
     def _find_model_config(model_dir: Path, config_patterns: list[str]) -> Path | None:
-        preferred = [model_dir / pattern for pattern in config_patterns if "/" not in pattern]
+        expanded_patterns = ConfigReader._expand_patterns(config_patterns, model_dir.name)
+        preferred = [model_dir / pattern for pattern in expanded_patterns if "/" not in pattern]
         for path in preferred:
             if path.exists():
                 return path
 
         candidates = [
             path
-            for pattern in config_patterns
-            for path in sorted(model_dir.rglob(pattern))
+            for pattern in expanded_patterns
+            for path in ConfigReader._iter_pattern_matches(model_dir, pattern)
             if path.is_file() and path.name != "package_info.json"
         ]
         return candidates[0] if candidates else None
@@ -267,8 +347,8 @@ class ConfigReader:
         if explicit_path:
             path = Path(explicit_path)
             return str(path.resolve()) if path.exists() else ""
-        for pattern in patterns:
-            for path in sorted(model_dir.rglob(pattern)):
+        for pattern in ConfigReader._expand_patterns(patterns, model_dir.name):
+            for path in ConfigReader._iter_pattern_matches(model_dir, pattern):
                 if path.is_file():
                     return str(path.resolve())
         return ""
@@ -286,10 +366,10 @@ class ConfigReader:
             return str(resolved.resolve()) if resolved else ""
 
         candidates: list[Path] = []
-        for pattern in file_patterns:
-            candidates.extend(path for path in sorted(model_dir.rglob(pattern)) if path.is_file())
-        for pattern in dir_patterns:
-            for log_dir in sorted(model_dir.rglob(pattern)):
+        for pattern in ConfigReader._expand_patterns(file_patterns, model_dir.name):
+            candidates.extend(path for path in ConfigReader._iter_pattern_matches(model_dir, pattern) if path.is_file())
+        for pattern in ConfigReader._expand_patterns(dir_patterns, model_dir.name):
+            for log_dir in ConfigReader._iter_pattern_matches(model_dir, pattern):
                 if log_dir.is_dir():
                     candidates.extend(path for path in log_dir.rglob("*") if path.is_file())
 
@@ -323,9 +403,33 @@ class ConfigReader:
         return None
 
     @staticmethod
+    def _expand_patterns(patterns: list[str], model_name: str) -> list[str]:
+        return [pattern.replace("{model_name}", model_name) for pattern in patterns]
+
+    @staticmethod
+    def _iter_pattern_matches(root: Path, pattern: str) -> list[Path]:
+        normalized = pattern.strip()
+        if not normalized:
+            return []
+        iterator = root.glob(normalized) if "/" in normalized or "\\" in normalized else root.rglob(normalized)
+        return sorted(iterator)
+
+    @staticmethod
+    def _render_pattern_example(pattern: str) -> str:
+        return pattern.replace("{model_name}", "<model-name>")
+
+    @staticmethod
     def _as_patterns(value: Any, default: list[str]) -> list[str]:
         if isinstance(value, str) and value.strip():
             return [value.strip()]
         if isinstance(value, list):
             return [str(item).strip() for item in value if str(item).strip()]
         return list(default)
+
+    @staticmethod
+    def _as_positive_int(value: Any, default: int) -> int:
+        try:
+            parsed = int(value)
+        except (TypeError, ValueError):
+            return default
+        return parsed if parsed > 0 else default

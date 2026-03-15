@@ -10,10 +10,20 @@ from model_test_agent.state import ErrorEntry
 
 
 class TestCLIHelpers:
+    def test_parse_args_supports_rag_dir(self, monkeypatch) -> None:
+        monkeypatch.setattr(sys, "argv", ["model-test-agent", "--rag-dir", "/tmp/rag"])
+        args = _parse_args()
+        assert args.rag_dir == "/tmp/rag"
+
     def test_parse_args_supports_codebase_root(self, monkeypatch) -> None:
         monkeypatch.setattr(sys, "argv", ["model-test-agent", "--codebase-root", "/repo"])
         args = _parse_args()
         assert args.codebase_root == "/repo"
+
+    def test_parse_args_supports_docker_script(self, monkeypatch) -> None:
+        monkeypatch.setattr(sys, "argv", ["model-test-agent", "--docker-script", "/tmp/enter_container.sh"])
+        args = _parse_args()
+        assert args.docker_script == "/tmp/enter_container.sh"
 
     def test_parse_args_supports_target_layout_config(self, monkeypatch) -> None:
         monkeypatch.setattr(sys, "argv", ["model-test-agent", "--target-layout-config", "/tmp/target_layout.yaml"])
@@ -24,6 +34,18 @@ class TestCLIHelpers:
         monkeypatch.setattr(sys, "argv", ["model-test-agent", "--skip-health-check"])
         args = _parse_args()
         assert args.skip_health_check is True
+
+    def test_parse_args_supports_serve_report(self, monkeypatch) -> None:
+        monkeypatch.setattr(sys, "argv", ["model-test-agent", "--serve-report", "/tmp/report.html", "--serve-port", "9000"])
+        args = _parse_args()
+        assert args.serve_report == "/tmp/report.html"
+        assert args.serve_port == 9000
+
+    def test_parse_args_supports_ui(self, monkeypatch) -> None:
+        monkeypatch.setattr(sys, "argv", ["model-test-agent", "--ui", "--ui-port", "8123"])
+        args = _parse_args()
+        assert args.ui is True
+        assert args.ui_port == 8123
 
     def test_extract_snapshot_includes_paths_and_sample_hits(self, tmp_path) -> None:
         state = {
@@ -130,12 +152,14 @@ class TestCLIHelpers:
                     ErrorEntry(model_name="m2", line_number=2, message="oops"),
                 ],
                 "codebase_root": "/repo",
+                "docker_script_path": "/tmp/enter_container.sh",
             },
         )
 
         assert "resolved_paths: 1/2" in lines
         assert "source_hits: 1/2" in lines
         assert "codebase_root: /repo" in lines
+        assert "docker_script: /tmp/enter_container.sh" in lines
         assert "source_samples:" in lines
 
     def test_main_forwards_llm_config_to_full_pipeline(self, monkeypatch, tmp_path) -> None:
@@ -155,6 +179,10 @@ class TestCLIHelpers:
                 str(tmp_path / "target_layout.yaml"),
                 "--codebase-root",
                 str(tmp_path / "repo"),
+                "--docker-script",
+                str(tmp_path / "enter_container.sh"),
+                "--rag-dir",
+                str(tmp_path / "rag"),
             ],
         )
         monkeypatch.setattr(cli, "_run_full_pipeline", lambda *args: captured.setdefault("args", args))
@@ -164,6 +192,8 @@ class TestCLIHelpers:
         assert captured["args"][2] == str(tmp_path / "llm.yaml")
         assert captured["args"][3] == str(tmp_path / "target_layout.yaml")
         assert captured["args"][4] == str(tmp_path / "repo")
+        assert captured["args"][5] == str(tmp_path / "enter_container.sh")
+        assert captured["args"][6] == str(tmp_path / "rag")
 
     def test_main_requires_target_dir_for_run(self, monkeypatch, tmp_path) -> None:
         captured = {}
@@ -183,3 +213,50 @@ class TestCLIHelpers:
 
         assert captured["args"][0] == str(tmp_path)
         assert captured["args"][1] == "./output"
+
+    def test_main_can_serve_report_without_running_pipeline(self, monkeypatch, tmp_path) -> None:
+        captured = {}
+        report_path = tmp_path / "report.html"
+        report_path.write_text("<html></html>", encoding="utf-8")
+        monkeypatch.setattr(
+            sys,
+            "argv",
+            [
+                "model-test-agent",
+                "--serve-report",
+                str(report_path),
+                "--serve-port",
+                "8123",
+            ],
+        )
+        monkeypatch.setattr(cli, "_serve_report", lambda path, port: captured.setdefault("args", (path, port)))
+
+        cli.main()
+
+        assert captured["args"] == (str(report_path), 8123)
+
+    def test_main_can_start_ui_without_running_pipeline(self, monkeypatch, tmp_path) -> None:
+        captured = {}
+        monkeypatch.setattr(
+            sys,
+            "argv",
+            [
+                "model-test-agent",
+                "--ui",
+                "--ui-port",
+                "8123",
+                "--target-dir",
+                str(tmp_path),
+                "--codebase-root",
+                str(tmp_path / "repo"),
+                "--auto-fix",
+            ],
+        )
+        monkeypatch.setattr(cli, "_serve_ui", lambda port, defaults: captured.setdefault("args", (port, defaults)))
+
+        cli.main()
+
+        assert captured["args"][0] == 8123
+        assert captured["args"][1]["target_dir"] == str(tmp_path)
+        assert captured["args"][1]["codebase_root"] == str(tmp_path / "repo")
+        assert captured["args"][1]["auto_fix"] == "1"

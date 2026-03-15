@@ -53,7 +53,7 @@ class ReportGenerator:
     def generate_xlsx(self, rows: list[ReportRow], filename: str | None = None) -> Path:
         """Write an XLSX report and return the file path."""
         xlsx_cfg = self._cfg.get("xlsx", {})
-        columns: list[dict[str, Any]] = xlsx_cfg.get("columns", self._default_columns())
+        xlsx_columns: list[dict[str, Any]] = xlsx_cfg.get("columns", self._default_columns())
 
         if filename is None:
             ts = datetime.now().strftime("%Y%m%d_%H%M%S")
@@ -82,7 +82,7 @@ class ReportGenerator:
             bottom=Side(style="thin"),
         )
 
-        for col_idx, col_def in enumerate(columns, start=1):
+        for col_idx, col_def in enumerate(xlsx_columns, start=1):
             cell = ws.cell(row=1, column=col_idx, value=col_def["header"])
             cell.fill = header_fill
             cell.font = header_font
@@ -96,7 +96,7 @@ class ReportGenerator:
 
         for row_idx, report_row in enumerate(rows, start=2):
             row_dict = self._row_to_dict(report_row)
-            for col_idx, col_def in enumerate(columns, start=1):
+            for col_idx, col_def in enumerate(xlsx_columns, start=1):
                 value = row_dict.get(col_def["key"], "")
                 cell = ws.cell(row=row_idx, column=col_idx, value=value)
                 cell.alignment = Alignment(vertical="center", wrap_text=True)
@@ -126,7 +126,8 @@ class ReportGenerator:
         """Write a self-contained HTML report and return the file path."""
         html_cfg = self._cfg.get("html", {})
         xlsx_cfg = self._cfg.get("xlsx", {})
-        columns: list[dict[str, Any]] = xlsx_cfg.get("columns", self._default_columns())
+        xlsx_columns: list[dict[str, Any]] = xlsx_cfg.get("columns", self._default_columns())
+        html_columns = [column for column in xlsx_columns if column.get("key") not in {"checked_by", "comment"}]
 
         if filename is None:
             ts = datetime.now().strftime("%Y%m%d_%H%M%S")
@@ -136,8 +137,15 @@ class ReportGenerator:
         title = html_cfg.get("title", "Model Conversion Test Report")
 
         # Build table rows
-        header_cells = "".join(f'<th>{html.escape(c["header"])}</th>' for c in columns)
-        header_cells += "<th>Checked By</th><th>Log</th>"
+        header_cells = "<th>Checked By</th><th>Comment</th>"
+        log_inserted = False
+        for column in html_columns:
+            header_cells += f'<th>{html.escape(column["header"])}</th>'
+            if column["key"] == "error_category":
+                header_cells += "<th>Log</th>"
+                log_inserted = True
+        if not log_inserted:
+            header_cells += "<th>Log</th>"
         body_rows = []
         log_cache: dict[str, str] = {}
         for i, report_row in enumerate(rows):
@@ -146,25 +154,35 @@ class ReportGenerator:
             row_classes = ["report-row"]
             if i % 2 == 1:
                 row_classes.append("alt")
-            cells = "".join(
-                self._build_table_cell(c["key"], rd.get(c["key"], ""))
-                for c in columns
-            )
             row_id = f"row-{i}"
             log_id = f"log-{i}"
             checked_by_key = self._row_storage_key(report_row, i)
+            checked_by = report_row.checked_by.strip()
+            comment = report_row.comment.strip()
+            cell_parts = [
+                self._build_checked_by_cell(report_row, checked_by_key),
+                self._build_comment_cell(report_row, checked_by_key),
+            ]
+            log_cell = f'<td class="log-actions">{self._build_log_actions(report_row, log_id)}</td>'
+            log_inserted = False
+            for column in html_columns:
+                cell_parts.append(self._build_table_cell(column["key"], rd.get(column["key"], "")))
+                if column["key"] == "error_category":
+                    cell_parts.append(log_cell)
+                    log_inserted = True
+            if not log_inserted:
+                cell_parts.append(log_cell)
             body_rows.append(
                 f'  <tr id="{row_id}" class="{" ".join(row_classes)}"'
                 f' data-status="{html.escape(report_row.status, quote=True)}"'
                 f' data-categories="{html.escape("|".join(categories), quote=True)}"'
+                f' data-checked="{str(bool(checked_by)).lower()}"'
                 f' data-detail-target="{log_id if report_row.log_path else ""}">'
-                f"{cells}"
-                f"{self._build_checked_by_cell(report_row, checked_by_key)}"
-                f'<td class="log-actions">{self._build_log_actions(report_row, log_id)}</td></tr>'
+                f'{"".join(cell_parts)}</tr>'
             )
             if report_row.log_path:
                 body_rows.append(
-                    self._build_log_detail(report_row, len(columns) + 2, log_id, row_id, log_cache)
+                    self._build_log_detail(report_row, len(html_columns) + 3, log_id, row_id, log_cache)
                 )
         body_html = "\n".join(body_rows)
 
@@ -230,6 +248,7 @@ class ReportGenerator:
             "package_summary": row.package_summary,
             "quantization": row.quantization,
             "has_test_data": row.has_test_data,
+            "config_hints": row.config_hints,
             "error_category": row.error_category,
             "error_count": row.error_count,
             "key_log_snippet": row.key_log_snippet,
@@ -239,6 +258,7 @@ class ReportGenerator:
             "fix_result": row.fix_result,
             "status": row.status,
             "checked_by": row.checked_by,
+            "comment": row.comment,
         }
 
     @staticmethod
@@ -248,6 +268,7 @@ class ReportGenerator:
             {"key": "package_summary", "header": "Package", "width": 28},
             {"key": "quantization", "header": "Quantization", "width": 14},
             {"key": "has_test_data", "header": "Has Test Data", "width": 13},
+            {"key": "config_hints", "header": "Config Hints", "width": 24},
             {"key": "error_category", "header": "Error Category", "width": 18},
             {"key": "key_log_snippet", "header": "Key Log (truncated)", "width": 50},
             {"key": "history_match", "header": "Seen Before", "width": 12},
@@ -291,6 +312,17 @@ class ReportGenerator:
             "<span>Checked</span>"
             "</label>"
             f'<div class="checked-by-name">{label}</div>'
+            "</td>"
+        )
+
+    @staticmethod
+    def _build_comment_cell(row: ReportRow, row_key: str) -> str:
+        comment = html.escape(row.comment.strip())
+        return (
+            '<td class="comment-cell"'
+            f' data-row-key="{html.escape(row_key, quote=True)}"'
+            f' data-initial-comment="{comment}">'
+            f'<textarea class="comment-input" rows="2" placeholder="Add comment">{comment}</textarea>'
             "</td>"
         )
 
@@ -463,9 +495,26 @@ _HTML_TEMPLATE = """\
     align-items: center;
     justify-content: space-between;
     gap: 12px;
+    flex-wrap: wrap;
     margin-bottom: 12px;
     color: #51606f;
     font-size: 0.92em;
+  }}
+  .toolbar-left {{
+    display: flex;
+    align-items: center;
+    gap: 12px;
+    flex-wrap: wrap;
+  }}
+  .filter-pills {{
+    display: inline-flex;
+    align-items: center;
+    gap: 8px;
+    flex-wrap: wrap;
+  }}
+  .filter-pills-label {{
+    font-weight: 600;
+    color: #425466;
   }}
   .toolbar button {{
     border: 0;
@@ -510,6 +559,11 @@ _HTML_TEMPLATE = """\
     white-space: pre-wrap;
     line-height: 1.55;
   }}
+  table.report td.cell-fix_result,
+  table.report td.cell-status {{
+    white-space: nowrap;
+    min-width: 150px;
+  }}
   table.report td.cell-key_log_snippet {{
     max-width: 520px;
     white-space: pre-wrap;
@@ -517,6 +571,9 @@ _HTML_TEMPLATE = """\
   .checked-by-cell {{
     min-width: 170px;
     white-space: nowrap;
+  }}
+  .comment-cell {{
+    min-width: 240px;
   }}
   .checked-by-toggle {{
     display: inline-flex;
@@ -536,6 +593,24 @@ _HTML_TEMPLATE = """\
     margin-top: 6px;
     color: #51606f;
     font-size: 0.92em;
+  }}
+  .comment-input {{
+    width: 100%;
+    min-height: 54px;
+    resize: vertical;
+    border: 1px solid #d3dce6;
+    border-radius: 8px;
+    padding: 8px 10px;
+    background: #fbfcfe;
+    color: #2c3e50;
+    font: inherit;
+    line-height: 1.4;
+  }}
+  .comment-input:focus {{
+    outline: none;
+    border-color: rgba(31, 78, 121, 0.65);
+    box-shadow: 0 0 0 3px rgba(31, 78, 121, 0.12);
+    background: #fff;
   }}
   .log-actions {{
     white-space: nowrap;
@@ -634,20 +709,24 @@ _HTML_TEMPLATE = """\
       group: "all",
       category: "all",
       status: "all",
+      checked: "all",
     }};
     const reportRows = Array.from(document.querySelectorAll("tr.report-row"));
     const detailRows = Array.from(document.querySelectorAll(".log-detail-row"));
     const checkedByCells = Array.from(document.querySelectorAll(".checked-by-cell"));
+    const commentCells = Array.from(document.querySelectorAll(".comment-cell"));
     const filterState = document.getElementById("filter-state");
     const clearButton = document.getElementById("clear-filters");
     const toast = document.getElementById("toast");
     const usernameStorageKey = "model-test-agent:checked-by-user";
-    const reportStorageKey = `model-test-agent:report-checks:${{window.location.pathname}}`;
-    const checkedByState = loadCheckedByState();
+    const reportStorageKey = `model-test-agent:report-review:${{window.location.pathname}}`;
+    const reviewApiUrl = `/api/review-state?report=${{encodeURIComponent(window.location.pathname)}}`;
+    const reviewState = loadReviewState();
     const canOpenLocalFiles = window.location.protocol === "file:";
     let toastTimer = null;
+    let saveTimer = null;
 
-    function loadCheckedByState() {{
+    function loadReviewState() {{
       try {{
         const raw = window.localStorage.getItem(reportStorageKey);
         const parsed = raw ? JSON.parse(raw) : {{}};
@@ -657,8 +736,70 @@ _HTML_TEMPLATE = """\
       }}
     }}
 
-    function saveCheckedByState() {{
-      window.localStorage.setItem(reportStorageKey, JSON.stringify(checkedByState));
+    function normalizeReviewEntry(value) {{
+      if (typeof value === "string") {{
+        return {{ checkedBy: value.trim(), comment: "" }};
+      }}
+      if (value && typeof value === "object") {{
+        return {{
+          checkedBy: typeof value.checkedBy === "string" ? value.checkedBy.trim() : "",
+          comment: typeof value.comment === "string" ? value.comment : "",
+        }};
+      }}
+      return {{ checkedBy: "", comment: "" }};
+    }}
+
+    function normalizeReviewState(value) {{
+      if (!value || typeof value !== "object") {{
+        return {{}};
+      }}
+      const normalized = {{}};
+      Object.entries(value).forEach(([rowKey, entry]) => {{
+        const reviewEntry = normalizeReviewEntry(entry);
+        if (reviewEntry.checkedBy || reviewEntry.comment.trim()) {{
+          normalized[rowKey] = reviewEntry;
+        }}
+      }});
+      return normalized;
+    }}
+
+    function saveLocalReviewState() {{
+      window.localStorage.setItem(reportStorageKey, JSON.stringify(reviewState));
+    }}
+
+    async function loadRemoteReviewState() {{
+      if (window.location.protocol === "file:") {{
+        return null;
+      }}
+      try {{
+        const response = await window.fetch(reviewApiUrl, {{
+          method: "GET",
+          headers: {{ "Accept": "application/json" }},
+        }});
+        if (!response.ok) {{
+          return null;
+        }}
+        const payload = await response.json();
+        return normalizeReviewState(payload.rows);
+      }} catch (_error) {{
+        return null;
+      }}
+    }}
+
+    async function saveReviewState() {{
+      saveLocalReviewState();
+      if (window.location.protocol === "file:") {{
+        return;
+      }}
+      try {{
+        await window.fetch(reviewApiUrl, {{
+          method: "PUT",
+          headers: {{ "Content-Type": "application/json" }},
+          body: JSON.stringify({{ rows: reviewState }}),
+        }});
+      }} catch (_error) {{
+        return;
+      }}
     }}
 
     function showToast(message) {{
@@ -709,12 +850,43 @@ _HTML_TEMPLATE = """\
       const checkbox = cell.querySelector(".checked-by-checkbox");
       const name = cell.querySelector(".checked-by-name");
       const value = (checkedBy || "").trim();
+      const row = cell.closest("tr.report-row");
       if (checkbox) {{
         checkbox.checked = Boolean(value);
       }}
       if (name) {{
         name.textContent = value || "-";
       }}
+      if (row) {{
+        row.dataset.checked = value ? "true" : "false";
+      }}
+    }}
+
+    function renderCommentCell(cell, comment) {{
+      const input = cell.querySelector(".comment-input");
+      if (input) {{
+        input.value = comment || "";
+      }}
+    }}
+
+    function updateReviewState(rowKey, patch) {{
+      const current = normalizeReviewEntry(reviewState[rowKey]);
+      const next = {{
+        checkedBy: Object.prototype.hasOwnProperty.call(patch, "checkedBy") ? patch.checkedBy : current.checkedBy,
+        comment: Object.prototype.hasOwnProperty.call(patch, "comment") ? patch.comment : current.comment,
+      }};
+      if (!next.checkedBy && !next.comment.trim()) {{
+        delete reviewState[rowKey];
+      }} else {{
+        reviewState[rowKey] = next;
+      }}
+      saveLocalReviewState();
+      if (saveTimer) {{
+        window.clearTimeout(saveTimer);
+      }}
+      saveTimer = window.setTimeout(() => {{
+        void saveReviewState();
+      }}, 250);
     }}
 
     function resetDetail(row) {{
@@ -743,6 +915,12 @@ _HTML_TEMPLATE = """\
         return false;
       }}
       if (filters.status !== "all" && status !== filters.status) {{
+        return false;
+      }}
+      if (filters.checked === "checked" && row.dataset.checked !== "true") {{
+        return false;
+      }}
+      if (filters.checked === "unchecked" && row.dataset.checked === "true") {{
         return false;
       }}
       return true;
@@ -784,10 +962,13 @@ _HTML_TEMPLATE = """\
       const rowKey = cell.dataset.rowKey;
       const checkbox = cell.querySelector(".checked-by-checkbox");
       const initialCheckedBy = (cell.dataset.initialCheckedBy || "").trim();
-      const savedCheckedBy = typeof checkedByState[rowKey] === "string" ? checkedByState[rowKey].trim() : "";
-      const resolvedCheckedBy = savedCheckedBy || initialCheckedBy;
+      const savedEntry = normalizeReviewEntry(reviewState[rowKey]);
+      const resolvedCheckedBy = savedEntry.checkedBy || initialCheckedBy;
       if (resolvedCheckedBy) {{
-        checkedByState[rowKey] = resolvedCheckedBy;
+        reviewState[rowKey] = {{
+          checkedBy: resolvedCheckedBy,
+          comment: savedEntry.comment,
+        }};
       }}
       renderCheckedByCell(cell, resolvedCheckedBy);
       if (!checkbox || !rowKey) {{
@@ -795,9 +976,8 @@ _HTML_TEMPLATE = """\
       }}
       checkbox.addEventListener("change", () => {{
         if (!checkbox.checked) {{
-          delete checkedByState[rowKey];
           renderCheckedByCell(cell, "");
-          saveCheckedByState();
+          updateReviewState(rowKey, {{ checkedBy: "" }});
           return;
         }}
         const username = ensureUsername();
@@ -805,12 +985,57 @@ _HTML_TEMPLATE = """\
           checkbox.checked = false;
           return;
         }}
-        checkedByState[rowKey] = username;
         renderCheckedByCell(cell, username);
-        saveCheckedByState();
+        updateReviewState(rowKey, {{ checkedBy: username }});
       }});
     }});
-    saveCheckedByState();
+    commentCells.forEach((cell) => {{
+      const rowKey = cell.dataset.rowKey;
+      const initialComment = cell.dataset.initialComment || "";
+      const savedEntry = normalizeReviewEntry(reviewState[rowKey]);
+      const resolvedComment = savedEntry.comment || initialComment;
+      if (rowKey && (savedEntry.checkedBy || resolvedComment)) {{
+        reviewState[rowKey] = {{
+          checkedBy: savedEntry.checkedBy,
+          comment: resolvedComment,
+        }};
+      }}
+      renderCommentCell(cell, resolvedComment);
+      const input = cell.querySelector(".comment-input");
+      if (!rowKey || !input) {{
+        return;
+      }}
+      input.addEventListener("input", () => {{
+        updateReviewState(rowKey, {{ comment: input.value }});
+      }});
+    }});
+    saveLocalReviewState();
+
+    async function hydrateRemoteReviewState() {{
+      const remoteState = await loadRemoteReviewState();
+      if (!remoteState) {{
+        return;
+      }}
+      Object.entries(remoteState).forEach(([rowKey, entry]) => {{
+        reviewState[rowKey] = normalizeReviewEntry(entry);
+      }});
+      checkedByCells.forEach((cell) => {{
+        const rowKey = cell.dataset.rowKey;
+        if (!rowKey) {{
+          return;
+        }}
+        renderCheckedByCell(cell, normalizeReviewEntry(reviewState[rowKey]).checkedBy);
+      }});
+      commentCells.forEach((cell) => {{
+        const rowKey = cell.dataset.rowKey;
+        if (!rowKey) {{
+          return;
+        }}
+        renderCommentCell(cell, normalizeReviewEntry(reviewState[rowKey]).comment);
+      }});
+      saveLocalReviewState();
+      applyFilters();
+    }}
 
     document.querySelectorAll(".filter-card, .filter-option").forEach((node) => {{
       node.addEventListener("click", () => {{
@@ -821,6 +1046,7 @@ _HTML_TEMPLATE = """\
           filters.group = "all";
           filters.category = "all";
           filters.status = "all";
+          filters.checked = "all";
         }} else {{
           filters[kind] = filters[kind] === value ? "all" : value;
         }}
@@ -833,6 +1059,7 @@ _HTML_TEMPLATE = """\
         filters.group = "all";
         filters.category = "all";
         filters.status = "all";
+        filters.checked = "all";
         applyFilters();
       }});
     }}
@@ -880,6 +1107,7 @@ _HTML_TEMPLATE = """\
     }});
 
     applyFilters();
+    void hydrateRemoteReviewState();
   }});
 </script>
 </head>
@@ -928,7 +1156,15 @@ _HTML_TEMPLATE = """\
   </div>
 
   <div class="toolbar">
-    <div id="filter-state">Showing {visible_rows} of {visible_rows} rows</div>
+    <div class="toolbar-left">
+      <div id="filter-state">Showing {visible_rows} of {visible_rows} rows</div>
+      <div class="filter-pills" aria-label="Checked filter">
+        <span class="filter-pills-label">Checked</span>
+        <button type="button" class="filter-option active" data-filter-kind="checked" data-filter-value="all">All</button>
+        <button type="button" class="filter-option" data-filter-kind="checked" data-filter-value="checked">Checked</button>
+        <button type="button" class="filter-option" data-filter-kind="checked" data-filter-value="unchecked">Unchecked</button>
+      </div>
+    </div>
     <button type="button" id="clear-filters">Clear Filters</button>
   </div>
 

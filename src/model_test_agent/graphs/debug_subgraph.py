@@ -15,6 +15,7 @@ from typing import Any
 
 from langgraph.graph import END, StateGraph
 
+from model_test_agent.debug_config import load_debug_settings
 from model_test_agent.skills.debug_analyzer import DebugAnalyzerSkill
 from model_test_agent.state import DebugResult, DebugState, FixStatus
 from model_test_agent.tools.docker_executor import DockerExecutor
@@ -26,6 +27,7 @@ def _analyze(state: DebugState) -> dict[str, Any]:
     error_groups = state.get("error_groups", {})
     models = state.get("models", [])
     llm_config_path = state.get("llm_config_path")
+    rag_dir = state.get("rag_dir", "")
     existing_results = {result.error_category: result for result in state.get("debug_results", [])}
 
     pending_groups = {
@@ -39,15 +41,16 @@ def _analyze(state: DebugState) -> dict[str, Any]:
     if not pending_groups:
         return {"debug_results": list(existing_results.values())}
 
+    retrieval_top_k = load_debug_settings().retrieval.top_k
     skill = DebugAnalyzerSkill(llm_config_path=llm_config_path)
-    retriever = SemanticRetriever(config_path=llm_config_path)
+    retriever = SemanticRetriever(config_path=llm_config_path, knowledge_dir=rag_dir)
 
     # Retrieve relevant history per category before calling the LLM.
     history_per_category = {
         category: retriever.find_similar(
             category,
             key_log=errors[0].message if errors else "",
-            top_k=3,
+            top_k=retrieval_top_k,
         )
         for category, errors in pending_groups.items()
     }
@@ -71,7 +74,7 @@ def _analyze(state: DebugState) -> dict[str, Any]:
 
 def _execute_fix(state: DebugState) -> dict[str, Any]:
     """Execute fix commands via Docker for results that have a fix_command."""
-    executor = DockerExecutor()
+    executor = DockerExecutor(docker_script_path=state.get("docker_script_path", ""))
     auto_fix = state.get("auto_fix", False)
     results = state.get("debug_results", [])
     updated: list[DebugResult] = []

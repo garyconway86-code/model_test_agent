@@ -1,0 +1,58 @@
+# ============================================================
+# Debug / RAG Packaging Configuration
+# ============================================================
+# 这个文件控制：
+# 1. 从源码里截取多少上下文
+# 2. 每类错误向 LLM 发送多少日志样本
+# 3. 本地 RAG 检索时切多大的文本块
+#
+# 适合先从默认值开始。
+# 如果以后换成长上下文模型，可以优先调大下面这些值，
+# 而不是直接改代码。
+# ============================================================
+
+source_context:
+  # 从命中的源码文件里，读取报错行上下各多少行。
+  # 15 表示：报错行前 15 行 + 当前行 + 后 15 行。
+  context_lines: 15
+
+prompt_budget:
+  # 每个错误类别，最多送多少条错误样本给 LLM。
+  # 值越大，覆盖面越全；但 prompt 也会更长。
+  max_error_samples: 5
+
+  # 每条错误样本里，日志上下文最多保留多少字符。
+  max_log_chars_per_sample: 600
+
+  # 每条错误样本里，源码上下文最多保留多少字符。
+  max_source_chars_per_sample: 1200
+
+  # 每个模型最多带多少配置摘要字符。
+  # 适合把 <model-name>.yaml、Config/legacy.yaml 这类重点配置带进 prompt。
+  max_config_chars_per_model: 1200
+
+  # 单个配置文件最多保留多少字符，避免某个大 YAML 挤占全部上下文。
+  max_config_chars_per_file: 400
+
+  # 最多引用多少条历史案例 / RAG 文档。
+  max_history_items: 3
+
+  # 每条历史案例 / RAG 文档，最多摘录多少字符。
+  max_history_excerpt_chars: 240
+
+retrieval:
+  # 每次检索最多保留多少条结果。
+  top_k: 3
+
+  # 本地文档切块大小。适合 txt / md / json / csv / xlsx。
+  # 值越大，单块信息更完整；值越小，召回会更细。
+  knowledge_chunk_size: 1200
+
+  # 文档切块的重叠长度，避免重要信息刚好落在分块边界。
+  knowledge_chunk_overlap: 120
+
+  # HTML / prompt 中展示文档摘录时，最多显示多少字符。
+  knowledge_excerpt_chars: 900
+
+  # 如果启用 embedding，每个 chunk 最多送多少字符去生成向量。
+  embedding_input_chars: 4000

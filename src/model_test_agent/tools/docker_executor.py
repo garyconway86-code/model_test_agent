@@ -9,6 +9,7 @@ from __future__ import annotations
 
 import subprocess
 from dataclasses import dataclass
+from pathlib import Path
 
 
 @dataclass
@@ -51,16 +52,20 @@ class DockerExecutor:
     def __init__(
         self,
         docker_image: str | None = None,
+        docker_script_path: str | None = None,
         timeout: int = 300,
         work_dir: str = "/workspace",
     ) -> None:
         self.docker_image = docker_image
+        self.docker_script_path = str(Path(docker_script_path).resolve()) if docker_script_path else ""
         self.timeout = timeout
         self.work_dir = work_dir
 
     def run(self, command: str) -> ExecutionResult:
         """Execute *command* and return structured result."""
-        if self.docker_image:
+        if self.docker_script_path:
+            full_cmd = ["bash", self.docker_script_path, command]
+        elif self.docker_image:
             full_cmd = [
                 "docker", "run", "--rm",
                 "-v", f"{self.work_dir}:/workspace",

@@ -78,6 +78,7 @@ class ReportRow:
     package_summary: str = ""
     quantization: str = ""
     has_test_data: str = ""
+    config_hints: str = ""
     error_category: str = ""
     error_count: int = 0
     key_log_snippet: str = ""
@@ -87,6 +88,7 @@ class ReportRow:
     fix_result: str = ""
     status: str = ""
     checked_by: str = ""
+    comment: str = ""
 
 
 class AgentState(TypedDict, total=False):
@@ -94,10 +96,10 @@ class AgentState(TypedDict, total=False):
 
     # --- Inputs ---
     target_dir: str
-    log_dir: str
-    config_path: str
     target_layout_path: str
     codebase_root: str
+    docker_script_path: str
+    rag_dir: str
     output_dir: str
     llm_config_path: str
     auto_fix: bool
@@ -142,6 +144,8 @@ class DebugState(TypedDict, total=False):
     max_retries: int
     auto_fix: bool
     llm_config_path: str
+    rag_dir: str
+    docker_script_path: str
 
 
 class SNRState(TypedDict, total=False):
@@ -149,4 +153,3 @@ class SNRState(TypedDict, total=False):
 
     models: list[ModelInfo]
     snr_results: dict[str, Any]
-    log_dir: str

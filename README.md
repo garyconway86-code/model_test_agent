@@ -1,21 +1,21 @@
 # 模型转换测试分析 Agent
 
-一个面向“模型转换/编译失败日志”的单机分析工具。  
-它会按下面这条主线工作：
+一个面向“模型转换 / 编译失败日志”的单机分析工具。主流程是：
 
 `日志提取 -> 源码定位 -> 错误分类 -> 调试分析 -> 汇总报告`
 
-适合的场景：
-- 自动化测试失败后，批量整理模型日志
-- 从日志里提取报错位置，再补源码上下文给大模型推理
-- 输出终端摘要、Excel 报告和可交互 HTML 报告
+输出包括：
+- 终端过程摘要
+- Excel 报告
+- 可交互 HTML 报告
+- 可选的共享评注模式（`Checked By / Comment`）
 
 ## 3 分钟上手
 
 ### 1. 安装
 
 ```bash
-conda create -n model-test-agent python=3.11 -y
+conda create -n model-test-agent python=3.10 -y
 conda activate model-test-agent
 pip install -r requirements-dev.txt
 pip install -e .
@@ -26,14 +26,14 @@ Python 最低版本是 `3.10`。
 
 ### 2. 配 LLM
 
-默认的 [llm.yaml](/Users/wu/Documents/projects/model_test_agent/config/llm.yaml) 已经按 DeepSeek 接口预置，通常只需要在 `.env` 里填：
+默认的 [llm.yaml](/Users/wu/Documents/projects/model_test_agent/config/llm.yaml) 已按 DeepSeek 预置，通常只需要在 `.env` 里填：
 
 ```bash
 DEEPSEEK_API_KEY=your-key
 MTA_MODEL_DEFAULT=deepseek-chat
 ```
 
-如果你用的是内部部署的 Qwen / Kimi，只需要改 [llm.yaml](/Users/wu/Documents/projects/model_test_agent/config/llm.yaml) 里对应 profile 的 `base_url / api_key / model`。
+如果你用内部部署的 Qwen / Kimi，改 [config/llm.yaml](/Users/wu/Documents/projects/model_test_agent/config/llm.yaml) 里的 `base_url / api_key / model` 即可。
 
 ### 3. 跑 demo
 
@@ -44,145 +44,216 @@ model-test-agent \
   --mode full
 ```
 
-跑完后会得到：
-- 终端过程摘要
-- `xlsx` 报告
-- 可交互 `html` 报告
-
-## 先记住这 3 个参数
+## 常用参数
 
 - `--target-dir`
-  模型测试目录。目录下每个一级子目录都会被当成一个模型目录。
+  必填。目录下每个一级子目录都视为一个模型目录。
 
 - `--target-layout-config`
-  可选。用于显式指定目录布局规则；不传时默认读取 `target-dir/target_layout.yaml`。
+  可选。显式指定布局配置；不传时默认读取 `target-dir/target_layout.yaml`。
 
 - `--codebase-root`
-  可选。源码根目录。日志里提取到报错源码路径后，程序会从这里读取上下文。
+  可选。宿主机源码根目录，用于补源码上下文。
+
+- `--docker-script`
+  可选。进入 Docker 环境的脚本路径，用于读取容器内源码或执行修复命令。
+
+- `--rag-dir`
+  可选。本地知识目录，支持 `txt / md / json / csv / xlsx`。
 
 最常用命令：
 
 ```bash
 # 完整流程
-model-test-agent --target-dir ./Models_35 --output ./output
+model-test-agent --target-dir ./Models_to_be_tested --output ./output
 
 # 只做分类
-model-test-agent --target-dir ./Models_35 --mode classify
+model-test-agent --target-dir ./Models_to_be_tested --mode classify
 
 # 只做调试分析
-model-test-agent --target-dir ./Models_35 --mode debug
+model-test-agent --target-dir ./Models_to_be_tested --mode debug
 
-# 指定源码根目录（宿主机模式）
-model-test-agent --target-dir ./Models_35 --codebase-root /path/to/compiler/repo
+# 宿主机源码模式
+model-test-agent --target-dir ./Models_to_be_tested --codebase-root /path/to/compiler/repo
 
-# 指定 layout 配置
-model-test-agent --target-dir ./Models_35 --target-layout-config ./Models_35/target_layout.yaml
+# 通过脚本进入已有 Docker 环境
+model-test-agent --target-dir ./Models_to_be_tested --docker-script ./enter_container.sh
+
+# 启用本地 RAG
+model-test-agent --target-dir ./Models_to_be_tested --rag-dir ./rag_materials
+
+# 用本地服务打开共享评注版报告
+model-test-agent --serve-report ./output/test_report_20260315_120000.html
+
+# 启动远端友好的 Web UI
+model-test-agent --ui --ui-port 7860
 ```
+
+共享评注模式会在 HTML 报告旁边生成一个同名的 `.review.json` 文件，用来保存 `Checked By` 和 `Comment`。这样同一个目录下的报告可以共享同一份评注记录。
+
+如果你在 SSH 服务器上运行 UI，推荐本地这样转发：
+
+```bash
+ssh -L 7860:127.0.0.1:7860 user@remote-host
+```
+
+然后浏览器打开：
+
+```text
+http://127.0.0.1:7860
+```
+
+这个 UI 的目录浏览器读取的是服务器文件系统，不是你本机浏览器的文件系统。
 
 ## 目录约定
 
-默认情况下，`target-dir` 下面每个一级子目录都视为一个模型目录。程序会在每个模型目录内寻找：
-- 配置文件，如 `model_config.yaml` / `config.yaml`
-- `package_info.json`
-- 日志文件，或名字以 `.log` 结尾的日志目录
-
-示意：
+默认目录结构：
 
 ```text
-Models_35/
+Models_to_be_tested/
   01-1_yolo/
-    model_config.yaml
+    01-1_yolo.yaml
     package_info.json
-    runs/
-      20260312_101500/
-        convert.log
+    Converter_result/
+      convert/
+        .log/
+          20260312_101500.txt
 ```
 
-如果你的现场目录不是这个样子，就加一个 `target_layout.yaml`。
+默认规则是：
+- 配置文件：`<model-name>.yaml`
+- 重要补充配置：`Config/legacy.yaml`（也可在 layout 里自定义）
+- 包信息：`package_info.json`
+- 日志目录：`Converter_result/convert/.log/`
+- 日志文件：取目录里最新的文件
 
-示例：
+如果现场目录不一样，就加一个 `target_layout.yaml`。示例见 [examples/demo_models/Models_35/target_layout.yaml](/Users/wu/Documents/projects/model_test_agent/examples/demo_models/Models_35/target_layout.yaml)。
+
+如果除了主配置文件外，`Config/legacy.yaml`、`Config/*.yaml` 这类文件也很关键，可以在 layout 里显式声明：
 
 ```yaml
-model_dir_pattern: "*"
 config_patterns:
-  - model_config.yaml
-  - config.yaml
-package_info_patterns:
-  - package_info.json
-log_dir_patterns:
-  - "*.log"
-latest_log_file: true
+  - "{model_name}.yaml"
+config_context_patterns:
+  - "{model_name}.yaml"
+  - Config/legacy.yaml
+  - Config/*.yaml
+config_context_max_files: 4
 ```
 
-这表示：
-- 一级子目录是模型目录
-- 配置文件按 `config_patterns` 找
-- `package_info.json` 按 `package_info_patterns` 找
-- 如果存在 `.log` 目录，就读取里面最新的日志文件
-
-demo 示例布局文件在 [target_layout.yaml](/Users/wu/Documents/projects/model_test_agent/examples/demo_models/Models_35/target_layout.yaml)。
+程序不会把整个配置目录原样塞进 prompt，而是：
+- 只取你声明的重要配置文件
+- 每个模型最多取前几个文件
+- 再按 [config/debug.yaml](/Users/wu/Documents/projects/model_test_agent/config/debug.yaml) 里的预算裁剪
 
 ## 源码上下文怎么接
 
-这是现在最关键的一层：程序会先从日志里提取报错源码路径和行号，再尝试读取源码上下文，然后把“日志 + 源码片段”一起交给 LLM。
+推荐三种方式：
 
-你有两种推荐方式：
+### 1. 直接在 Docker 里运行
 
-### 方式 1：直接在 Docker 里运行
-
-这是最直接的方式。  
-如果日志里的源码路径本来就是容器内路径，那么程序和源码在同一个运行环境里，路径解析最省心。
+最直接。如果日志里的源码路径本来就是容器内路径，这种方式最省心。
 
 ```bash
-model-test-agent --target-dir ./Models_35
+model-test-agent --target-dir ./Models_to_be_tested
 ```
 
-### 方式 2：在宿主机运行，显式指定源码根目录
-
-如果程序跑在宿主机，但源码仓库也能在宿主机访问，就传：
+### 2. 在宿主机运行，指定源码根目录
 
 ```bash
 model-test-agent \
-  --target-dir ./Models_35 \
+  --target-dir ./Models_to_be_tested \
   --codebase-root /path/to/compiler/repo
 ```
 
-程序会按日志中的路径后缀去匹配这个仓库里的真实文件。
-
-如果源码找不到，也不会中断流程，而是降级成：
-- 仅根据日志继续推理
-
-## 输出内容
-
-完整流程会生成：
-- 终端摘要
-- Excel 报告
-- HTML 交互报告
-
-HTML 报告里可以：
-- 按状态和错误类别筛选
-- 展开查看命中的日志源文件
-- 查看 `Suggested Fix`
-- 在本地打开报告时直接 `Open File`
-- 在 HTTP/SSH 转发访问时自动降级成 `Copy Path`
-
-## 工作流结构
-
-主流程：
+程序会先从日志里提取一个最像报错位置的文件路径和行号，再在 `codebase-root` 下按“路径后缀匹配”找真实文件。  
+例如日志里是：
 
 ```text
-extract
-  -> source_context
-  -> classification
-  -> debug
-  -> save_history
-  -> report
+/usr/local/lib/python/dist-packages/snc_py_api/foo/bar.py:128
 ```
 
-三层职责：
-- `tools/`：确定性工具，不依赖 LLM
-- `skills/`：LLM 推理
-- `graphs/`：LangGraph 编排
+它会尝试类似这些路径：
+
+```text
+/path/to/compiler/repo/usr/local/lib/python/dist-packages/snc_py_api/foo/bar.py
+/path/to/compiler/repo/dist-packages/snc_py_api/foo/bar.py
+/path/to/compiler/repo/snc_py_api/foo/bar.py
+/path/to/compiler/repo/foo/bar.py
+```
+
+谁存在就用谁。找不到就退回到“原始日志 + RAG”继续分析，不会中断流程。
+
+### 3. 在宿主机运行，通过脚本进入已有 Docker 环境
+
+```bash
+model-test-agent \
+  --target-dir ./Models_to_be_tested \
+  --docker-script ./enter_container.sh
+```
+
+脚本只需要接受一条命令并在容器里执行，例如：
+
+```bash
+#!/usr/bin/env bash
+docker exec your_container_name bash -lc "$1"
+```
+
+这样程序会：
+- 通过脚本读取容器内源码上下文
+- 在 `--auto-fix` 打开时，也通过脚本执行修复命令
+
+## 关于 traceback 路径
+
+这是当前 MVP 的边界之一。
+
+真实 traceback 里常常会有多层调用路径，出现的文件不一定就是最终根因文件。当前版本会：
+
+1. 从日志里提取所有像源码路径的候选
+2. 优先选路径更长、层级更深的候选
+3. 只读取这个候选文件附近的一小段上下文
+4. 同时把原始日志和 RAG 结果一起交给 LLM
+
+所以当前“源码上下文”是高价值辅助线索，但不是对根因文件的绝对保证。
+
+## 本地 RAG
+
+你可以直接准备一个目录，例如：
+
+```text
+rag_materials/
+  compiler_notes.md
+  known_issues.txt
+  workaround.xlsx
+```
+
+运行：
+
+```bash
+model-test-agent \
+  --target-dir ./Models_to_be_tested \
+  --rag-dir ./rag_materials
+```
+
+当前行为：
+- 默认先做本地词法检索，离线也能用
+- 如果 [config/llm.yaml](/Users/wu/Documents/projects/model_test_agent/config/llm.yaml) 里配置了 `embedding` profile，会自动追加 embedding 相似度
+- 检索结果会作为外部知识一起送进 debug 分析
+
+## 长上下文怎么调
+
+如果以后换成长上下文模型，优先改 [config/debug.yaml](/Users/wu/Documents/projects/model_test_agent/config/debug.yaml)，不用先改代码。
+
+最常调的是：
+- `source_context.context_lines`
+- `prompt_budget.max_error_samples`
+- `prompt_budget.max_log_chars_per_sample`
+- `prompt_budget.max_source_chars_per_sample`
+- `retrieval.top_k`
+
+简单理解：
+- 短上下文模型：这些值保持小一些更稳
+- 长上下文模型：可以逐步调大，但建议一次只改 1 到 2 项
 
 ## 配置文件
 
@@ -191,12 +262,13 @@ extract
 | 文件 | 用途 |
 |------|------|
 | [config/llm.yaml](/Users/wu/Documents/projects/model_test_agent/config/llm.yaml) | LLM profile 配置 |
+| [config/debug.yaml](/Users/wu/Documents/projects/model_test_agent/config/debug.yaml) | 控制源码上下文、日志裁剪和 RAG 切块大小 |
 | [config/error_keywords.yaml](/Users/wu/Documents/projects/model_test_agent/config/error_keywords.yaml) | 日志关键词分类规则 |
 | [config/report.yaml](/Users/wu/Documents/projects/model_test_agent/config/report.yaml) | 报告列和样式 |
 | [config/i18n.yaml](/Users/wu/Documents/projects/model_test_agent/config/i18n.yaml) | 中英文文案 |
 | [history/cases.json](/Users/wu/Documents/projects/model_test_agent/history/cases.json) | 历史调试案例 |
 
-## 其他常用参数
+## 其他参数
 
 | 参数 | 说明 |
 |------|------|
@@ -210,6 +282,8 @@ extract
 | `--skip-health-check` | 跳过启动前 LLM 预检 |
 | `--show-graph` | 打印工作流图结构后退出 |
 | `--export-graph` | 导出图结构到 `.md` 或 `.png` |
+
+`snr` 模式目前还是实验性占位能力，适合开发验证，不建议当成稳定主流程。
 
 ## 测试
 

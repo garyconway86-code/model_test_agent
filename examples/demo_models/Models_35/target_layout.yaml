@@ -1,9 +1,11 @@
 config_patterns:
-  - model_config.yaml
+  - "{model_name}.yaml"
+config_context_patterns:
+  - "{model_name}.yaml"
+  - Config/legacy.yaml
 package_info_patterns:
   - package_info.json
 log_dir_patterns:
-  - runs
-log_file_patterns:
-  - "*.log"
+  - Converter_result/convert/.log
+log_file_patterns: []
 latest_log_file: true

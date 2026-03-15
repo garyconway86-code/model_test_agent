@@ -4,7 +4,13 @@ from pathlib import Path
 
 from model_test_agent.graphs.classification_subgraph import build_classification_subgraph
 from model_test_agent.graphs.debug_subgraph import build_debug_subgraph
-from model_test_agent.graphs.main_graph import _enrich_source_context, _extract, _report, build_main_graph
+from model_test_agent.graphs.main_graph import (
+    _enrich_source_context,
+    _extract,
+    _report,
+    _summarize_suggested_fixes,
+    build_main_graph,
+)
 from model_test_agent.graphs.snr_subgraph import build_snr_subgraph
 from model_test_agent.state import DebugResult, ErrorEntry, FixStatus, ModelInfo
 
@@ -73,6 +79,7 @@ class TestGraphConstruction:
             "retry_count": 0,
             "max_retries": 2,
             "auto_fix": False,
+            "rag_dir": "/tmp/rag",
         })
 
         assert len(result["debug_results"]) == 1
@@ -108,8 +115,9 @@ class TestGraphConstruction:
         executed_commands = []
 
         class DummyRetriever:
-            def __init__(self, config_path=None):
+            def __init__(self, config_path=None, knowledge_dir=None):
                 self.config_path = config_path
+                self.knowledge_dir = knowledge_dir
 
             def find_similar(self, category, key_log="", top_k=3):
                 return []
@@ -151,6 +159,7 @@ class TestGraphConstruction:
             "max_retries": 1,
             "auto_fix": True,
             "llm_config_path": "/tmp/llm-alt.yaml",
+            "rag_dir": "/tmp/rag",
         })
 
         assert analyzed_categories == [["bad", "ok"], ["bad"]]
@@ -196,6 +205,13 @@ class TestGraphConstruction:
                     name="m1",
                     config_path=str(tmp_path / "model.yaml"),
                     package_info_path=str(package_info),
+                    extra={
+                        "model_dir": str(tmp_path),
+                        "config_context_files": [
+                            str(tmp_path / "model.yaml"),
+                            str(tmp_path / "Config" / "legacy.yaml"),
+                        ],
+                    },
                 ),
                 ModelInfo(
                     name="m2",
@@ -209,7 +225,17 @@ class TestGraphConstruction:
         assert result["report_html_path"].endswith("report.html")
         assert "report_rows" in result
         assert result["report_rows"][0].log_path == "/tmp/m1.log"
+        assert result["report_rows"][0].config_hints == "model.yaml | Config/legacy.yaml"
         assert any(row.model_name == "m2" and row.error_category == "no_error" for row in result["report_rows"])
+
+    def test_suggested_fix_summary_keeps_full_text(self) -> None:
+        long_fix = "use calibration cache and disable per-channel quantization for the failing Conv2D branch"
+
+        summary = _summarize_suggested_fixes([
+            DebugResult(error_category="quantization_error", suggested_fix=long_fix),
+        ])
+
+        assert long_fix in summary
 
     def test_extract_uses_configured_log_paths_before_directory_scan(self, monkeypatch, tmp_path) -> None:
         explicit_log = tmp_path / "Models_35" / "01-1_yolo" / "run_001" / "convert.log"
@@ -257,8 +283,9 @@ class TestGraphConstruction:
 
     def test_enrich_source_context_populates_code_location_and_context(self, monkeypatch) -> None:
         class DummyResolver:
-            def __init__(self, codebase_root="", context_lines=15):
+            def __init__(self, codebase_root="", context_lines=15, docker_script_path=""):
                 self.codebase_root = codebase_root
+                self.docker_script_path = docker_script_path
 
             def extract_error_location(self, text):
                 assert "shape mismatch" in text
@@ -278,6 +305,7 @@ class TestGraphConstruction:
             "errors": [ErrorEntry(model_name="m1", line_number=5, message="shape mismatch", raw_context="shape mismatch")],
             "source_info": {"target_dir": "/tmp/models"},
             "codebase_root": "/repo",
+            "docker_script_path": "/tmp/enter_container.sh",
         })
 
         assert result["errors"][0].error_file_path == "src/demo.cpp"

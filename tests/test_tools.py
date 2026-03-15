@@ -9,9 +9,11 @@ from pathlib import Path
 import pytest
 
 from model_test_agent.state import ErrorEntry, ModelInfo, ReportRow
+from model_test_agent.debug_config import load_debug_settings
 from model_test_agent.tools.config_reader import ConfigReader
 from model_test_agent.tools.docker_executor import DockerExecutor
 from model_test_agent.tools.history_store import HistoryStore
+from model_test_agent.tools.knowledge_base import KnowledgeBase
 from model_test_agent.tools.log_extractor import LogExtractor
 from model_test_agent.tools.report_generator import ReportGenerator
 from model_test_agent.tools.semantic_retriever import SemanticRetriever
@@ -150,14 +152,24 @@ class TestConfigReader:
     def test_read_target_directory_uses_first_level_model_dirs(self, tmp_path: Path) -> None:
         model_dir = tmp_path / "Models_35" / "01-1_yolo"
         model_dir.mkdir(parents=True)
-        (model_dir / "model_config.yaml").write_text("quantization: int8\n", encoding="utf-8")
+        (model_dir / "01-1_yolo.yaml").write_text("quantization: int8\n", encoding="utf-8")
         (model_dir / "package_info.json").write_text('{"version": "1.0.0"}', encoding="utf-8")
+        config_dir = model_dir / "Config"
+        config_dir.mkdir()
+        (config_dir / "legacy.yaml").write_text("backend: legacy\nprecision: int8\n", encoding="utf-8")
+        log_bundle = model_dir / "Converter_result" / "convert" / ".log"
+        log_bundle.mkdir(parents=True)
+        (log_bundle / "latest.txt").write_text("[ERROR] demo\n", encoding="utf-8")
 
         models = ConfigReader.read_target_directory(tmp_path / "Models_35")
 
         assert len(models) == 1
         assert models[0].name == "01-1_yolo"
         assert models[0].package_info_path.endswith("package_info.json")
+        assert models[0].config_path.endswith("01-1_yolo.yaml")
+        assert models[0].log_path.endswith("latest.txt")
+        assert "Config/legacy.yaml" in models[0].extra["config_context"]
+        assert any(path.endswith("legacy.yaml") for path in models[0].extra["config_context_files"])
 
     def test_read_target_directory_uses_layout_config_and_latest_log_in_dot_log_dir(self, tmp_path: Path) -> None:
         target_dir = tmp_path / "Models_35"
@@ -195,6 +207,42 @@ class TestConfigReader:
         assert models[0].package_info_path == str(nested_pkg.resolve())
         assert models[0].log_path == str(newer_log.resolve())
 
+    def test_layout_can_customize_config_context_patterns(self, tmp_path: Path) -> None:
+        target_dir = tmp_path / "Models_35"
+        model_dir = target_dir / "01-1_yolo"
+        primary_cfg = model_dir / "01-1_yolo.yaml"
+        legacy_cfg = model_dir / "Config" / "legacy.yaml"
+        extra_cfg = model_dir / "Config" / "runtime.yaml"
+        log_dir = model_dir / "Converter_result" / "convert" / ".log"
+
+        extra_cfg.parent.mkdir(parents=True)
+        log_dir.mkdir(parents=True)
+        primary_cfg.write_text("quantization: int8\n", encoding="utf-8")
+        legacy_cfg.write_text("backend: legacy\n", encoding="utf-8")
+        extra_cfg.write_text("device: npu\n", encoding="utf-8")
+        (log_dir / "latest.txt").write_text("[ERROR] demo\n", encoding="utf-8")
+        (target_dir / "target_layout.yaml").write_text(
+            "config_patterns:\n"
+            "  - '{model_name}.yaml'\n"
+            "config_context_patterns:\n"
+            "  - Config/*.yaml\n"
+            "config_context_max_files: 3\n"
+            "log_dir_patterns:\n"
+            "  - Converter_result/convert/.log\n"
+            "log_file_patterns: []\n"
+            "latest_log_file: true\n",
+            encoding="utf-8",
+        )
+
+        models = ConfigReader.read_target_directory(target_dir)
+
+        assert len(models) == 1
+        context_files = models[0].extra["config_context_files"]
+        assert len(context_files) == 3
+        assert any(path.endswith("01-1_yolo.yaml") for path in context_files)
+        assert any(path.endswith("legacy.yaml") for path in context_files)
+        assert any(path.endswith("runtime.yaml") for path in context_files)
+
     def test_read_file_resolves_relative_model_paths(self, tmp_path: Path) -> None:
         cfg = tmp_path / "models.yaml"
         cfg.write_text(
@@ -211,6 +259,27 @@ class TestConfigReader:
         assert models[0].config_path == str((tmp_path / "Models_35/01-1_yolo/model.yaml").resolve())
         assert models[0].log_path == str((tmp_path / "Models_35/01-1_yolo/run_001/convert.log").resolve())
         assert models[0].package_info_path == str((tmp_path / "Models_35/01-1_yolo/package_info.json").resolve())
+
+
+class TestDebugConfig:
+    def test_load_debug_settings_from_yaml(self, tmp_path: Path) -> None:
+        cfg = tmp_path / "debug.yaml"
+        cfg.write_text(
+            "source_context:\n"
+            "  context_lines: 8\n"
+            "prompt_budget:\n"
+            "  max_error_samples: 7\n"
+            "retrieval:\n"
+            "  top_k: 5\n",
+            encoding="utf-8",
+        )
+
+        settings = load_debug_settings(cfg)
+
+        assert settings.source_context.context_lines == 8
+        assert settings.prompt_budget.max_error_samples == 7
+        assert settings.retrieval.top_k == 5
+        assert settings.prompt_budget.max_log_chars_per_sample == 600
 
 
 class TestSourceContextResolver:
@@ -240,6 +309,44 @@ class TestSourceContextResolver:
     def test_retrieve_code_context_returns_fallback_when_missing(self, tmp_path: Path) -> None:
         resolver = SourceContextResolver(codebase_root=tmp_path)
         assert resolver.retrieve_code_context("src/missing.cpp", 12) == "源码未找到，请仅根据日志推理"
+
+    def test_retrieve_code_context_can_use_docker_script(self, tmp_path: Path) -> None:
+        script = tmp_path / "docker_wrapper.sh"
+        script.write_text(
+            "#!/usr/bin/env bash\n"
+            "bash -lc \"$1\"\n",
+            encoding="utf-8",
+        )
+        source = tmp_path / "workspace" / "compiler" / "src" / "op_fallback.cpp"
+        source.parent.mkdir(parents=True)
+        source.write_text("\n".join(f"line {index}" for index in range(1, 21)), encoding="utf-8")
+
+        resolver = SourceContextResolver(docker_script_path=script, context_lines=1)
+        context = resolver.retrieve_code_context(str(source), 5)
+
+        assert ">>     5 | line 5" in context
+        assert "      4 | line 4" in context
+
+
+class TestKnowledgeBase:
+    def test_search_reads_txt_and_xlsx(self, tmp_path: Path) -> None:
+        (tmp_path / "notes.txt").write_text("Conv2D quantization fallback requires int8 calibration", encoding="utf-8")
+        workbook_path = tmp_path / "workaround.xlsx"
+        from openpyxl import Workbook
+
+        workbook = Workbook()
+        sheet = workbook.active
+        sheet.title = "issues"
+        sheet.append(["op", "workaround"])
+        sheet.append(["Conv2D", "disable per-channel quantization"])
+        workbook.save(workbook_path)
+
+        kb = KnowledgeBase(tmp_path)
+        results = kb.search("Conv2D quantization workaround", top_k=2)
+
+        assert len(results) >= 1
+        assert any(item["kind"] == "document" for item in results)
+        assert any("Conv2D" in item["excerpt"] for item in results)
 
 
 # ------------------------------------------------------------------
@@ -309,6 +416,24 @@ class TestSemanticRetriever:
 
         assert retriever.find_similar("shape_mismatch", "shape mismatch", top_k=3) == []
 
+    def test_knowledge_dir_enables_local_rag_without_history(self, tmp_path: Path) -> None:
+        store_path = tmp_path / "cases.json"
+        store_path.write_text("[]")
+        store = HistoryStore(store_path)
+        knowledge_dir = tmp_path / "rag"
+        knowledge_dir.mkdir()
+        (knowledge_dir / "compiler_notes.md").write_text(
+            "Conv2D quantization can fail when calibration stats are missing.",
+            encoding="utf-8",
+        )
+
+        retriever = SemanticRetriever(store=store, knowledge_dir=knowledge_dir)
+        results = retriever.find_similar("dtype_error", "Conv2D quantization failed", top_k=2)
+
+        assert len(results) == 1
+        assert results[0]["kind"] == "document"
+        assert results[0]["source"] == "compiler_notes.md"
+
 
 # ------------------------------------------------------------------
 # DockerExecutor
@@ -333,6 +458,20 @@ class TestDockerExecutor:
         assert not result.success
         assert "timed out" in result.stderr.lower()
 
+    def test_run_command_via_wrapper_script(self, tmp_path: Path) -> None:
+        script = tmp_path / "docker_wrapper.sh"
+        script.write_text(
+            "#!/usr/bin/env bash\n"
+            "bash -lc \"$1\"\n",
+            encoding="utf-8",
+        )
+
+        executor = DockerExecutor(docker_script_path=str(script))
+        result = executor.run("echo wrapped")
+
+        assert result.success
+        assert "wrapped" in result.stdout
+
 
 # ------------------------------------------------------------------
 # ReportGenerator
@@ -349,6 +488,7 @@ class TestReportGenerator:
                 package_summary="demo-kit | v1.2.3",
                 quantization="int8",
                 has_test_data="是",
+                config_hints="01-1_yolo.yaml | Config/legacy.yaml",
                 error_category="shape_mismatch",
                 error_count=3,
                 key_log_snippet="expected shape [64,3,7,7] but got [64,3,3,3]",
@@ -357,6 +497,7 @@ class TestReportGenerator:
                 fix_executed="否",
                 fix_result="pending",
                 status="pending",
+                comment="needs compiler owner follow-up",
             ),
             ReportRow(
                 model_name="bert-base",
@@ -365,6 +506,7 @@ class TestReportGenerator:
                 package_summary="demo-kit | v1.2.4",
                 quantization="fp16",
                 has_test_data="是",
+                config_hints="02-1_qwen2.yaml",
                 error_category="dtype_error",
                 error_count=2,
                 key_log_snippet="unsupported dtype: bfloat16",
@@ -400,8 +542,8 @@ class TestReportGenerator:
             },
             source_info={
                 "target_dir": "/demo/Models_35",
-                "discovery_rule": "1st-level subdirs => models",
-                "source_tree": "target-dir/\n  01-1_model/\n    model_config.yaml",
+                "discovery_rule": "{model_name}.yaml + package_info.json + latest file in Converter_result/convert/.log",
+                "source_tree": "target-dir/\n  01-1_model/\n    01-1_model.yaml\n    package_info.json\n    Converter_result/convert/.log/\n      latest log file",
             },
         )
         assert path.exists()
@@ -413,12 +555,23 @@ class TestReportGenerator:
         assert "Open File" in content
         assert "shape mismatch" in content
         assert 'cell-suggested_fix' in content
+        assert '<th>Checked By</th><th>Comment</th><th>Model Name</th>' in content
+        assert '<th>Error Category</th><th>Log</th>' in content
+        assert content.count("<th>Comment</th>") == 1
+        assert "Config Hints" in content
+        assert "01-1_yolo.yaml | Config/legacy.yaml" in content
+        assert 'data-filter-kind="checked"' in content
+        assert "Unchecked" in content
+        assert 'data-checked="false"' in content
+        assert "cell-fix_result" in content
+        assert "needs compiler owner follow-up" in content
+        assert "comment-input" in content
         assert "Passed Models" in content
         assert ">2</div>" in content
         assert "Agent Assist" in content
         assert "Target Layout" in content
         assert "/demo/Models_35" in content
-        assert "model_config.yaml" in content
+        assert "01-1_model.yaml" in content
         assert "deepseek-chat" in content
         assert "demo-kit | v1.2.3" in content
 

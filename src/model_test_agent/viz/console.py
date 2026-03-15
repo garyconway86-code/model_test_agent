@@ -227,6 +227,9 @@ class ConsoleUI:
             lines.append(
                 f"Interactive Viewer: [underline]{Path(report_html_path).resolve().as_uri()}[/underline]"
             )
+            lines.append(
+                f"Shared Review: [underline]model-test-agent --serve-report {report_html_path}[/underline]"
+            )
         self.console.print()
         self.console.print(Panel(
             f"[bold green]分析完成[/bold green]\n" + "\n".join(lines),
