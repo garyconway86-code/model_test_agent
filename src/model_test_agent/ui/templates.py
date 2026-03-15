@@ -634,6 +634,16 @@ def render_app(defaults: dict[str, str]) -> str:
               </div>
 
               <div class="field">
+                <label for="mode">运行模式</label>
+                <select id="mode" name="mode">
+                  <option value="full">完整流程</option>
+                  <option value="classify">仅分类</option>
+                  <option value="debug">仅调试</option>
+                </select>
+                <small>仅分类会跑到错误分类为止；仅调试会继续生成根因分析，但都不会直接复用已有完整报告。</small>
+              </div>
+
+              <div class="field">
                 <label for="docker_script_path">Docker 进入脚本</label>
                 <div class="input-row">
                   <input id="docker_script_path" name="docker_script_path" type="text">
@@ -1006,6 +1016,13 @@ def render_app(defaults: dict[str, str]) -> str:
     }}
   }}
 
+  function clearReportViewer() {{
+    viewerShell.hidden = true;
+    reportLink.removeAttribute("href");
+    reportFrame.src = "about:blank";
+    reportMeta.textContent = "";
+  }}
+
   function renderHealth(payload) {{
     if (!payload || payload.ok === false) {{
       healthSummary.textContent = payload && payload.error ? `检查失败：${{payload.error}}` : "健康检查失败";
@@ -1146,11 +1163,12 @@ def render_app(defaults: dict[str, str]) -> str:
     }}
     const targetDir = document.getElementById("target_dir").value.trim();
     const outputDir = document.getElementById("output_dir").value.trim() || "./output";
+    const mode = document.getElementById("mode").value || "full";
     if (!targetDir) {{
       return;
     }}
     const response = await fetch(
-      `/api/report-lookup?target_dir=${{encodeURIComponent(targetDir)}}&output_dir=${{encodeURIComponent(outputDir)}}`
+      `/api/report-lookup?target_dir=${{encodeURIComponent(targetDir)}}&output_dir=${{encodeURIComponent(outputDir)}}&mode=${{encodeURIComponent(mode)}}`
     );
     if (!response.ok) {{
       return;
@@ -1158,6 +1176,8 @@ def render_app(defaults: dict[str, str]) -> str:
     const payload = await response.json();
     if (payload.exists) {{
       renderSnapshot(payload);
+    }} else if (currentSnapshot.status !== "running") {{
+      clearReportViewer();
     }}
   }}
 
@@ -1177,6 +1197,7 @@ def render_app(defaults: dict[str, str]) -> str:
     const payload = {{
       target_dir: document.getElementById("target_dir").value.trim(),
       output_dir: document.getElementById("output_dir").value.trim(),
+      mode: document.getElementById("mode").value,
       target_layout_path: document.getElementById("target_layout_path").value.trim(),
       codebase_root: document.getElementById("codebase_root").value.trim(),
       docker_script_path: document.getElementById("docker_script_path").value.trim(),
@@ -1371,6 +1392,7 @@ def render_app(defaults: dict[str, str]) -> str:
   document.getElementById("target_dir").addEventListener("blur", scheduleExistingReportLookup);
   document.getElementById("output_dir").addEventListener("change", scheduleExistingReportLookup);
   document.getElementById("output_dir").addEventListener("blur", scheduleExistingReportLookup);
+  document.getElementById("mode").addEventListener("change", scheduleExistingReportLookup);
   healthRefreshButton.addEventListener("click", () => void fetchHealthStatus());
   skipStepButton.addEventListener("click", () => void requestSkipCurrentStep());
   form.addEventListener("submit", (event) => void startRun(event, false));

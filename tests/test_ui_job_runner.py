@@ -86,3 +86,30 @@ class TestPipelineJobRunner:
 
         assert updated.skip_requested is True
         assert any("SKIP source_context" in message for message in updated.messages)
+
+    def test_start_uses_selected_subgraph_mode(self, monkeypatch) -> None:
+        def _unexpected_full(*args, **kwargs):
+            raise AssertionError("full pipeline should not run for classify mode")
+
+        def _fake_subset(initial_state, step_keys, on_event=None):
+            assert initial_state["mode"] == "classify"
+            assert step_keys == ["extract", "source_context", "classification"]
+            if on_event:
+                on_event(PipelineEvent("start", "classification", 3, 3, dict(initial_state)))
+                on_event(PipelineEvent("finish", "classification", 3, 3, {"error_groups": {"shape_mismatch": []}}))
+            return {"error_groups": {"shape_mismatch": []}}
+
+        monkeypatch.setattr("model_test_agent.ui.job_runner.run_main_pipeline", _unexpected_full)
+        monkeypatch.setattr("model_test_agent.ui.job_runner.run_pipeline_steps", _fake_subset)
+        runner = PipelineJobRunner()
+
+        snapshot = runner.start({"target_dir": "/tmp/models", "mode": "classify"})
+        for _ in range(20):
+            current = runner.get(snapshot.job_id)
+            if current.status == "completed":
+                break
+            time.sleep(0.01)
+
+        assert current.status == "completed"
+        assert current.mode == "classify"
+        assert current.detail == "Completed · 1 categories"

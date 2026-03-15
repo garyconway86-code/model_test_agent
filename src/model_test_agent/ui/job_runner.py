@@ -10,7 +10,12 @@ import time
 from typing import Any, Callable
 from uuid import uuid4
 
-from model_test_agent.pipeline import PipelineEvent, PipelineExecutionError, run_main_pipeline
+from model_test_agent.pipeline import (
+    PipelineEvent,
+    PipelineExecutionError,
+    run_main_pipeline,
+    run_pipeline_steps,
+)
 
 
 @dataclass
@@ -28,6 +33,7 @@ class JobSnapshot:
     report_html_path: str = ""
     report_url: str = ""
     target_dir: str = ""
+    mode: str = "full"
     pid: int = 0
     messages: list[str] = field(default_factory=list)
     started_at: float = 0.0
@@ -79,6 +85,7 @@ class PipelineJobRunner:
                 status="running",
                 detail="Queued",
                 target_dir=str(config.get("target_dir", "") or ""),
+                mode=str(config.get("mode", "full") or "full"),
                 pid=os.getpid(),
                 messages=["Queued pipeline run"],
                 started_at=time.time(),
@@ -107,6 +114,7 @@ class PipelineJobRunner:
                 report_html_path=report_html,
                 report_url=self._report_url_builder(job_id, report_html),
                 target_dir=target_dir,
+                mode="full",
                 pid=os.getpid(),
                 messages=["Loaded existing report"],
                 started_at=time.time(),
@@ -153,7 +161,7 @@ class PipelineJobRunner:
                     snapshot.error = event.error
 
         try:
-            result = run_main_pipeline(config, on_event=_on_event)
+            result = self._run_mode(config, on_event=_on_event)
         except PipelineExecutionError as exc:
             with self._lock:
                 snapshot = self._jobs[job_id]
@@ -177,12 +185,13 @@ class PipelineJobRunner:
 
         report_html_path = str(result.get("report_html_path", "") or "")
         report_path = str(result.get("report_path", "") or "")
+        mode = str(config.get("mode", "full") or "full")
         with self._lock:
             snapshot = self._jobs[job_id]
             snapshot.status = "completed"
-            snapshot.step_key = "report"
+            snapshot.step_key = snapshot.step_key or self._last_step_for_mode(mode)
             snapshot.step_index = snapshot.total_steps
-            snapshot.detail = f"Completed · {len(result.get('report_rows', []))} report rows"
+            snapshot.detail = self._completion_detail(mode, result)
             snapshot.report_path = report_path
             snapshot.report_html_path = report_html_path
             snapshot.report_url = (
@@ -204,6 +213,37 @@ class PipelineJobRunner:
     def _should_skip(self, job_id: str, step_key: str) -> bool:
         with self._lock:
             return step_key in self._skip_requests.get(job_id, set())
+
+    @staticmethod
+    def _run_mode(config: dict[str, Any], on_event: Callable[[PipelineEvent], None] | None = None) -> dict[str, Any]:
+        mode = str(config.get("mode", "full") or "full")
+        if mode == "full":
+            return run_main_pipeline(config, on_event=on_event)
+        if mode == "classify":
+            return run_pipeline_steps(config, ["extract", "source_context", "classification"], on_event=on_event)
+        if mode == "debug":
+            return run_pipeline_steps(
+                config,
+                ["extract", "source_context", "classification", "debug"],
+                on_event=on_event,
+            )
+        return run_main_pipeline(config, on_event=on_event)
+
+    @staticmethod
+    def _completion_detail(mode: str, result: dict[str, Any]) -> str:
+        if mode == "classify":
+            return f"Completed · {len(result.get('error_groups', {}))} categories"
+        if mode == "debug":
+            return f"Completed · {len(result.get('debug_results', []))} debug results"
+        return f"Completed · {len(result.get('report_rows', []))} report rows"
+
+    @staticmethod
+    def _last_step_for_mode(mode: str) -> str:
+        if mode == "classify":
+            return "classification"
+        if mode == "debug":
+            return "debug"
+        return "report"
 
     @staticmethod
     def _append_message(snapshot: JobSnapshot, message: str) -> None:

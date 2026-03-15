@@ -54,8 +54,18 @@ def run_main_pipeline(
     on_event: Callable[[PipelineEvent], None] | None = None,
 ) -> AgentState:
     """Run the full pipeline with per-step callbacks."""
+    return run_pipeline_steps(initial_state, [step.key for step in _build_steps()], on_event=on_event)
+
+
+def run_pipeline_steps(
+    initial_state: AgentState,
+    step_keys: list[str],
+    on_event: Callable[[PipelineEvent], None] | None = None,
+) -> AgentState:
+    """Run a selected subset of pipeline steps with per-step callbacks."""
     state: AgentState = dict(initial_state)
-    steps = _build_steps()
+    step_map = {step.key: step for step in _build_steps()}
+    steps = [step_map[key] for key in step_keys]
     total_steps = len(steps)
 
     for index, step in enumerate(steps, start=1):

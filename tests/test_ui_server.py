@@ -30,6 +30,9 @@ class TestUIServer:
             assert "Converter_result/convert/.log/" in content
             assert "PID" in content
             assert str(os.getpid()) in content
+            assert "运行模式" in content
+            assert "仅分类" in content
+            assert "仅调试" in content
             assert "LLM 健康度" in content
             assert "Embedding / Reranker 不可用时会自动降级，不会阻断主流程" in content
             assert "RAG 会自动退回本地词法检索" in content
@@ -177,6 +180,28 @@ class TestUIServer:
             assert payload["status"] == "completed"
             assert payload["detail"] == "Loaded existing report"
             assert payload["report_html_path"].endswith("report.html")
+        finally:
+            server_info.server.shutdown()
+            server_info.server.server_close()
+            thread.join(timeout=2)
+
+    def test_report_lookup_skips_existing_report_for_non_full_mode(self, tmp_path: Path) -> None:
+        target_dir = tmp_path / "Models_to_be_tested"
+        target_dir.mkdir()
+        artifacts = report_artifacts(tmp_path / "output", target_dir)
+        artifacts["html"].write_text("<html><body>report</body></html>", encoding="utf-8")
+
+        server_info = create_ui_server(port=0)
+        thread = threading.Thread(target=server_info.server.serve_forever, daemon=True)
+        thread.start()
+        try:
+            payload = json.loads(
+                urlopen(
+                    f"{server_info.base_url}/api/report-lookup?target_dir={target_dir}&output_dir={tmp_path / 'output'}&mode=classify"
+                ).read().decode("utf-8")
+            )
+            assert payload["exists"] is False
+            assert payload["mode"] == "classify"
         finally:
             server_info.server.shutdown()
             server_info.server.server_close()

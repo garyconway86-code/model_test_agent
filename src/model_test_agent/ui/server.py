@@ -124,6 +124,7 @@ class _UIServerRequestHandler(BaseHTTPRequestHandler):
         config = {
             "target_dir": target_dir,
             "output_dir": str(payload.get("output_dir", "") or "./output"),
+            "mode": str(payload.get("mode", "") or "full"),
             "llm_config_path": str(payload.get("llm_config_path", "") or ""),
             "target_layout_path": str(payload.get("target_layout_path", "") or ""),
             "codebase_root": str(payload.get("codebase_root", "") or ""),
@@ -202,13 +203,18 @@ class _UIServerRequestHandler(BaseHTTPRequestHandler):
         params = parse_qs(query)
         target_dir = str(params.get("target_dir", [""])[0] or "").strip()
         output_dir = str(params.get("output_dir", ["./output"])[0] or "./output").strip()
+        mode = str(params.get("mode", ["full"])[0] or "full").strip()
         if not target_dir:
             self._write_json(HTTPStatus.OK, {"exists": False})
+            return
+        if mode != "full":
+            self._write_json(HTTPStatus.OK, {"exists": False, "mode": mode})
             return
         artifacts = report_artifacts(output_dir, target_dir)
         exists = artifacts["html"].is_file()
         payload = {
             "exists": exists,
+            "mode": mode,
             "report_html_path": str(artifacts["html"]),
             "report_path": str(artifacts["xlsx"]),
             "review_path": str(artifacts["review"]),
@@ -349,6 +355,8 @@ class _UIServerRequestHandler(BaseHTTPRequestHandler):
     def _existing_report_snapshot(self, config: dict[str, Any]):
         target_dir = str(config.get("target_dir", "") or "").strip()
         if not target_dir:
+            return None
+        if str(config.get("mode", "full") or "full") != "full":
             return None
         artifacts = report_artifacts(str(config.get("output_dir", "./output") or "./output"), target_dir)
         if not artifacts["html"].is_file():

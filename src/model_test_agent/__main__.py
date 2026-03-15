@@ -624,6 +624,7 @@ def main() -> None:
             {
                 "target_dir": args.target_dir or "",
                 "output_dir": args.output,
+                "mode": args.mode,
                 "llm_config_path": args.llm_config or "",
                 "target_layout_path": args.target_layout_config or "",
                 "codebase_root": args.codebase_root or "",
