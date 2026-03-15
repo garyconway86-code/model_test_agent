@@ -563,6 +563,7 @@ class TestReportGenerator:
         assert 'data-filter-kind="checked"' in content
         assert "Unchecked" in content
         assert "column-resizer" in content
+        assert 'data-row-key="resnet50"' in content
         assert 'data-checked="false"' in content
         assert "cell-fix_result" in content
         assert "needs compiler owner follow-up" in content

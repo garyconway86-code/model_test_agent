@@ -351,13 +351,7 @@ class ReportGenerator:
 
     @staticmethod
     def _row_storage_key(row: ReportRow, index: int) -> str:
-        return "|".join([
-            str(index),
-            row.model_name,
-            row.log_path,
-            str(row.log_line),
-            row.error_category,
-        ])
+        return row.model_name or f"row-{index}"
 
     @staticmethod
     def _read_log_source(log_path: str, log_cache: dict[str, str]) -> str:

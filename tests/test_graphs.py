@@ -8,6 +8,7 @@ from model_test_agent.graphs.main_graph import (
     _enrich_source_context,
     _extract,
     _report,
+    _report_output_dir,
     _summarize_suggested_fixes,
     build_main_graph,
 )
@@ -173,19 +174,22 @@ class TestGraphConstruction:
     def test_report_node_returns_html_path(self, monkeypatch, tmp_path) -> None:
         package_info = tmp_path / "package_info.json"
         package_info.write_text('{"package_name": "demo-kit", "version": "1.2.3"}', encoding="utf-8")
+        captured = {}
 
         class DummyGenerator:
             def __init__(self, output_dir="."):
-                self.output_dir = output_dir
+                captured["output_dir"] = str(output_dir)
 
-            def generate_xlsx(self, rows):
+            def generate_xlsx(self, rows, filename=None):
+                captured["xlsx_filename"] = filename
                 return tmp_path / "report.xlsx"
 
-            def generate_html(self, rows, summary=None, agent_info=None, source_info=None):
+            def generate_html(self, rows, filename=None, summary=None, agent_info=None, source_info=None):
                 self.summary = summary
                 self.agent_info = agent_info
                 self.source_info = source_info
                 self.rows = rows
+                captured["html_filename"] = filename
                 return tmp_path / "report.html"
 
         monkeypatch.setattr("model_test_agent.graphs.main_graph.ReportGenerator", DummyGenerator)
@@ -219,6 +223,8 @@ class TestGraphConstruction:
                 ),
             ],
             "debug_results": [],
+            "target_dir": str(tmp_path / "Models_35"),
+            "output_dir": str(tmp_path / "output"),
         })
 
         assert result["report_path"].endswith("report.xlsx")
@@ -227,6 +233,18 @@ class TestGraphConstruction:
         assert result["report_rows"][0].log_path == "/tmp/m1.log"
         assert result["report_rows"][0].config_hints == "model.yaml | Config/legacy.yaml"
         assert any(row.model_name == "m2" and row.error_category == "no_error" for row in result["report_rows"])
+        assert captured["xlsx_filename"] == "report.xlsx"
+        assert captured["html_filename"] == "report.html"
+        assert captured["output_dir"].startswith(str((tmp_path / "output").resolve()))
+
+    def test_report_output_dir_is_stable_per_target_dir(self, tmp_path) -> None:
+        output_a = _report_output_dir(str(tmp_path / "output"), str(tmp_path / "Models_35"))
+        output_b = _report_output_dir(str(tmp_path / "output"), str(tmp_path / "Models_35"))
+        output_c = _report_output_dir(str(tmp_path / "output"), str(tmp_path / "OtherModels"))
+
+        assert output_a == output_b
+        assert output_a.name.startswith("Models_35-")
+        assert output_a != output_c
 
     def test_suggested_fix_summary_keeps_full_text(self) -> None:
         long_fix = "use calibration cache and disable per-channel quantization for the failing Conv2D branch"

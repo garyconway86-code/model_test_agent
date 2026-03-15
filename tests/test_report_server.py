@@ -49,11 +49,30 @@ class TestReportServer:
 
             saved = json.loads(review_state_path(report_path).read_text(encoding="utf-8"))
             assert saved["row-1|m1|/tmp/a.log|10|shape_mismatch"]["checkedBy"] == "alice"
+            assert saved["row-1|m1|/tmp/a.log|10|shape_mismatch"]["updatedAt"]
+            assert saved["row-1|m1|/tmp/a.log|10|shape_mismatch"]["history"]
 
             refreshed = json.loads(
                 urlopen(f"{server_info.base_url}/api/review-state?report=%2Fdemo_report.html").read().decode("utf-8")
             )
             assert refreshed["rows"]["row-1|m1|/tmp/a.log|10|shape_mismatch"]["comment"] == "need compiler owner review"
+
+            second_request = Request(
+                f"{server_info.base_url}/api/review-state?report=%2Fdemo_report.html",
+                data=json.dumps({
+                    "rows": {
+                        "row-1|m1|/tmp/a.log|10|shape_mismatch": {
+                            "checkedBy": "alice",
+                            "comment": "resolved with new calibration data",
+                        }
+                    }
+                }).encode("utf-8"),
+                method="PUT",
+                headers={"Content-Type": "application/json"},
+            )
+            urlopen(second_request)
+            saved_again = json.loads(review_state_path(report_path).read_text(encoding="utf-8"))
+            assert len(saved_again["row-1|m1|/tmp/a.log|10|shape_mismatch"]["history"]) >= 2
         finally:
             server_info.server.shutdown()
             server_info.server.server_close()

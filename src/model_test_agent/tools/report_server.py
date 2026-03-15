@@ -8,6 +8,7 @@ The server keeps the deployment simple:
 
 from __future__ import annotations
 
+from datetime import datetime, timezone
 import json
 from dataclasses import dataclass
 from functools import partial
@@ -78,29 +79,84 @@ def save_review_state(review_path: str | Path, state: dict[str, Any]) -> None:
     """Persist normalized review state to disk."""
     path = Path(review_path)
     path.parent.mkdir(parents=True, exist_ok=True)
+    existing = load_review_state(path)
     normalized = _normalize_review_state(state)
-    path.write_text(json.dumps(normalized, ensure_ascii=False, indent=2, sort_keys=True), encoding="utf-8")
+    merged = _merge_review_state(existing, normalized)
+    path.write_text(json.dumps(merged, ensure_ascii=False, indent=2, sort_keys=True), encoding="utf-8")
 
 
-def _normalize_review_state(state: dict[str, Any]) -> dict[str, dict[str, str]]:
+def _normalize_review_state(state: dict[str, Any]) -> dict[str, dict[str, Any]]:
     rows = state.get("rows") if "rows" in state else state
     if not isinstance(rows, dict):
         return {}
 
-    normalized: dict[str, dict[str, str]] = {}
+    normalized: dict[str, dict[str, Any]] = {}
     for row_key, value in rows.items():
         if not isinstance(row_key, str):
             continue
-        checked_by = ""
-        comment = ""
-        if isinstance(value, str):
-            checked_by = value.strip()
-        elif isinstance(value, dict):
-            checked_by = str(value.get("checkedBy", "") or "").strip()
-            comment = str(value.get("comment", "") or "")
-        if checked_by or comment.strip():
-            normalized[row_key] = {"checkedBy": checked_by, "comment": comment}
+        normalized_entry = _normalize_review_entry(value)
+        if normalized_entry:
+            normalized[row_key] = normalized_entry
     return normalized
+
+
+def _normalize_review_entry(value: Any) -> dict[str, Any]:
+    checked_by = ""
+    comment = ""
+    updated_at = ""
+    history: list[dict[str, str]] = []
+    if isinstance(value, str):
+        checked_by = value.strip()
+    elif isinstance(value, dict):
+        checked_by = str(value.get("checkedBy", "") or "").strip()
+        comment = str(value.get("comment", "") or "")
+        updated_at = str(value.get("updatedAt", "") or "")
+        raw_history = value.get("history", [])
+        if isinstance(raw_history, list):
+            for item in raw_history:
+                if not isinstance(item, dict):
+                    continue
+                history.append({
+                    "updatedAt": str(item.get("updatedAt", "") or ""),
+                    "checkedBy": str(item.get("checkedBy", "") or "").strip(),
+                    "comment": str(item.get("comment", "") or ""),
+                })
+    if not checked_by and not comment.strip() and not history:
+        return {}
+    entry: dict[str, Any] = {"checkedBy": checked_by, "comment": comment}
+    if updated_at:
+        entry["updatedAt"] = updated_at
+    if history:
+        entry["history"] = history
+    return entry
+
+
+def _merge_review_state(
+    existing: dict[str, Any],
+    incoming: dict[str, dict[str, Any]],
+) -> dict[str, dict[str, Any]]:
+    merged = dict(existing) if isinstance(existing, dict) else {}
+    now = datetime.now(timezone.utc).replace(microsecond=0).isoformat()
+    for row_key, next_entry in incoming.items():
+        previous = _normalize_review_entry(merged.get(row_key, {}))
+        history = list(previous.get("history", []))
+        changed = (
+            previous.get("checkedBy", "") != next_entry.get("checkedBy", "")
+            or previous.get("comment", "") != next_entry.get("comment", "")
+        )
+        if changed:
+            history.append({
+                "updatedAt": now,
+                "checkedBy": str(next_entry.get("checkedBy", "") or ""),
+                "comment": str(next_entry.get("comment", "") or ""),
+            })
+            next_entry["updatedAt"] = now
+        elif previous.get("updatedAt"):
+            next_entry["updatedAt"] = previous["updatedAt"]
+        if history:
+            next_entry["history"] = history[-20:]
+        merged[row_key] = next_entry
+    return merged
 
 
 class _ReportRequestHandler(SimpleHTTPRequestHandler):
