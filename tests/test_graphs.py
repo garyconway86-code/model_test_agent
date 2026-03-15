@@ -4,7 +4,7 @@ from pathlib import Path
 
 from model_test_agent.graphs.classification_subgraph import build_classification_subgraph
 from model_test_agent.graphs.debug_subgraph import build_debug_subgraph
-from model_test_agent.graphs.main_graph import _extract, _report, build_main_graph
+from model_test_agent.graphs.main_graph import _enrich_source_context, _extract, _report, build_main_graph
 from model_test_agent.graphs.snr_subgraph import build_snr_subgraph
 from model_test_agent.state import DebugResult, ErrorEntry, FixStatus, ModelInfo
 
@@ -254,3 +254,33 @@ class TestGraphConstruction:
         result = _extract({"target_dir": str(tmp_path), "target_layout_path": str(tmp_path / "target_layout.yaml")})
 
         assert result["source_info"]["layout_config"].endswith("target_layout.yaml")
+
+    def test_enrich_source_context_populates_code_location_and_context(self, monkeypatch) -> None:
+        class DummyResolver:
+            def __init__(self, codebase_root="", context_lines=15):
+                self.codebase_root = codebase_root
+
+            def extract_error_location(self, text):
+                assert "shape mismatch" in text
+                return ("src/demo.cpp", 42)
+
+            def retrieve_code_context(self, file_path, line_num):
+                assert file_path == "src/demo.cpp"
+                assert line_num == 42
+                return ">>    42 | return fail;"
+
+            def describe_codebase_root(self):
+                return "/repo"
+
+        monkeypatch.setattr("model_test_agent.graphs.main_graph.SourceContextResolver", DummyResolver)
+
+        result = _enrich_source_context({
+            "errors": [ErrorEntry(model_name="m1", line_number=5, message="shape mismatch", raw_context="shape mismatch")],
+            "source_info": {"target_dir": "/tmp/models"},
+            "codebase_root": "/repo",
+        })
+
+        assert result["errors"][0].error_file_path == "src/demo.cpp"
+        assert result["errors"][0].error_line_num == 42
+        assert "return fail" in result["errors"][0].source_code_context
+        assert result["source_info"]["codebase_root"] == "/repo"

@@ -15,6 +15,7 @@ from model_test_agent.tools.history_store import HistoryStore
 from model_test_agent.tools.log_extractor import LogExtractor
 from model_test_agent.tools.report_generator import ReportGenerator
 from model_test_agent.tools.semantic_retriever import SemanticRetriever
+from model_test_agent.tools.source_context import SourceContextResolver
 from model_test_agent.viz import charts
 
 
@@ -210,6 +211,35 @@ class TestConfigReader:
         assert models[0].config_path == str((tmp_path / "Models_35/01-1_yolo/model.yaml").resolve())
         assert models[0].log_path == str((tmp_path / "Models_35/01-1_yolo/run_001/convert.log").resolve())
         assert models[0].package_info_path == str((tmp_path / "Models_35/01-1_yolo/package_info.json").resolve())
+
+
+class TestSourceContextResolver:
+    def test_extract_error_location_prefers_longer_source_path(self) -> None:
+        resolver = SourceContextResolver()
+        log = (
+            "RuntimeError at helper.h:12\n"
+            "Caused by /workspace/compiler/src/op_fallback.cpp:417: quantize failed\n"
+        )
+
+        path, line = resolver.extract_error_location(log)
+
+        assert path == "/workspace/compiler/src/op_fallback.cpp"
+        assert line == 417
+
+    def test_retrieve_code_context_resolves_docker_style_path_via_codebase_root(self, tmp_path: Path) -> None:
+        source = tmp_path / "src" / "compiler" / "op_fallback.cpp"
+        source.parent.mkdir(parents=True)
+        source.write_text("\n".join(f"line {index}" for index in range(1, 61)), encoding="utf-8")
+
+        resolver = SourceContextResolver(codebase_root=tmp_path, context_lines=2)
+        context = resolver.retrieve_code_context("/workspace/compiler/src/compiler/op_fallback.cpp", 30)
+
+        assert ">>    30 | line 30" in context
+        assert "      28 | line 28" in context
+
+    def test_retrieve_code_context_returns_fallback_when_missing(self, tmp_path: Path) -> None:
+        resolver = SourceContextResolver(codebase_root=tmp_path)
+        assert resolver.retrieve_code_context("src/missing.cpp", 12) == "源码未找到，请仅根据日志推理"
 
 
 # ------------------------------------------------------------------

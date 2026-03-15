@@ -46,6 +46,9 @@ class ErrorEntry:
     message: str
     log_path: str = ""
     raw_context: str = ""
+    error_file_path: str = "Unknown"
+    error_line_num: int = 0
+    source_code_context: str = ""
     category: str = "unknown"
     matched_keyword: str = ""
 
@@ -94,6 +97,7 @@ class AgentState(TypedDict, total=False):
     log_dir: str
     config_path: str
     target_layout_path: str
+    codebase_root: str
     output_dir: str
     llm_config_path: str
     auto_fix: bool

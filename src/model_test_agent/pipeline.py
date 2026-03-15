@@ -7,7 +7,7 @@ from typing import Any, Callable
 
 from model_test_agent.graphs.classification_subgraph import build_classification_subgraph
 from model_test_agent.graphs.debug_subgraph import build_debug_subgraph
-from model_test_agent.graphs.main_graph import _extract, _report, _save_history
+from model_test_agent.graphs.main_graph import _enrich_source_context, _extract, _report, _save_history
 from model_test_agent.state import AgentState
 
 
@@ -41,6 +41,7 @@ def _build_steps() -> list[PipelineStep]:
     debug = build_debug_subgraph().compile()
     return [
         PipelineStep("extract", _extract),
+        PipelineStep("source_context", _enrich_source_context),
         PipelineStep("classification", classification.invoke),
         PipelineStep("debug", debug.invoke),
         PipelineStep("save_history", _save_history),

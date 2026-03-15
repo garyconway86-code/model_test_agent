@@ -38,6 +38,7 @@ from model_test_agent.tools.config_reader import ConfigReader
 from model_test_agent.tools.history_store import HistoryStore
 from model_test_agent.tools.log_extractor import LogExtractor
 from model_test_agent.tools.report_generator import ReportGenerator
+from model_test_agent.tools.source_context import SourceContextResolver
 
 
 # ------------------------------------------------------------------
@@ -70,6 +71,22 @@ def _extract(state: AgentState) -> dict[str, Any]:
         errors = extractor.extract_from_target_directory(target_dir)
 
     return {"errors": errors, "models": models, "source_info": source_info}
+
+
+def _enrich_source_context(state: AgentState) -> dict[str, Any]:
+    """Resolve source file locations from logs and load nearby code context."""
+    errors = state.get("errors", [])
+    resolver = SourceContextResolver(codebase_root=state.get("codebase_root", ""))
+    for err in errors:
+        file_path, line_num = resolver.extract_error_location(err.raw_context or err.message)
+        err.error_file_path = file_path
+        err.error_line_num = line_num
+        err.source_code_context = resolver.retrieve_code_context(file_path, line_num)
+
+    source_info = dict(state.get("source_info") or {})
+    if source_info:
+        source_info["codebase_root"] = resolver.describe_codebase_root()
+    return {"errors": errors, "source_info": source_info}
 
 
 def _save_history(state: AgentState) -> dict[str, Any]:
@@ -284,7 +301,7 @@ def _build_agent_info(llm_config_path: str) -> dict[str, str]:
     return {
         "classifier_model": str(classifier.get("model", "-")),
         "debugger_model": str(debugger.get("model", "-")),
-        "assisted_fields": "error_category, suggested_fix, root_cause",
+        "assisted_fields": "error_category, source_code_context, suggested_fix, root_cause",
     }
 
 
@@ -305,6 +322,7 @@ def build_main_graph(compile: bool = True) -> Any:
 
     # --- Nodes ---
     graph.add_node("extract", _extract)
+    graph.add_node("source_context", _enrich_source_context)
     graph.add_node("classification", build_classification_subgraph().compile())
     graph.add_node("debug", build_debug_subgraph().compile())
     graph.add_node("save_history", _save_history)
@@ -312,7 +330,8 @@ def build_main_graph(compile: bool = True) -> Any:
 
     # --- Edges ---
     graph.set_entry_point("extract")
-    graph.add_edge("extract", "classification")
+    graph.add_edge("extract", "source_context")
+    graph.add_edge("source_context", "classification")
     graph.add_edge("classification", "debug")
     graph.add_edge("debug", "save_history")
     graph.add_edge("save_history", "report")

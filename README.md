@@ -77,6 +77,9 @@ model-test-agent --target-dir ./Models_35 --skip-health-check
 
 # 显式指定 target layout 配置
 model-test-agent --target-dir ./Models_35 --target-layout-config ./Models_35/target_layout.yaml
+
+# 显式指定源码根目录（宿主机模式）
+model-test-agent --target-dir ./Models_35 --codebase-root /path/to/compiler/repo
 ```
 
 ### 参数说明
@@ -85,6 +88,7 @@ model-test-agent --target-dir ./Models_35 --target-layout-config ./Models_35/tar
 |------|--------|------|
 | `--target-dir` | — | 目标目录路径。目录下每个一级子目录视为一个测试模型目录 |
 | `--target-layout-config` | 自动读取 `target-dir/target_layout.yaml` | 显式指定 target layout 配置文件 |
+| `--codebase-root` | 当前运行目录 | 源码根目录。提取到报错源码路径后，会尝试从这里读取上下文 |
 | `--output` | `./output` | 报告和图表的输出目录 |
 | `--mode` | `full` | 运行模式：`full` 完整流程 / `classify` 仅分类 / `debug` 仅调试分析 / `snr` 仅 SNR 分析 |
 | `--auto-fix` | `false` | 自动在 Docker 中执行修复命令 |
@@ -125,6 +129,10 @@ latest_log_file: true
 ```
 
 上面这个配置表示：如果模型目录里存在名字以 `.log` 结尾的目录，就从目录内部读取最新的日志文件。
+
+如果日志里引用的源码路径只存在 Docker 容器里，有两种推荐方式：
+- 直接进入同一个 Docker 环境再运行 `model-test-agent`
+- 在宿主机运行，但通过 `--codebase-root` 指向对应源码仓库根目录
 
 ### `python -m` 什么时候用
 

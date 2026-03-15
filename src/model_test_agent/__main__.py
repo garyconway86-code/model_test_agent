@@ -21,7 +21,23 @@ from model_test_agent.viz.prompt import InteractivePrompter
 console = Console()
 ui = ConsoleUI()
 prompter = InteractivePrompter()
-_PIPELINE_STEP_KEYS = ["extract", "classification", "debug", "save_history", "report"]
+_PIPELINE_STEP_KEYS = ["extract", "source_context", "classification", "debug", "save_history", "report"]
+_STEP_TITLES = {
+    "extract": "step_extract",
+    "source_context": "step_source",
+    "classification": "step_classify",
+    "debug": "step_debug",
+    "save_history": "step_save",
+    "report": "step_report",
+    "charts": "step_charts",
+}
+_SNAPSHOT_TITLES = {
+    "extract": "snapshot_extract",
+    "source_context": "snapshot_source",
+    "classification": "snapshot_classify",
+    "debug": "snapshot_debug",
+    "report": "snapshot_report",
+}
 
 
 def _parse_args() -> argparse.Namespace:
@@ -32,6 +48,7 @@ def _parse_args() -> argparse.Namespace:
     parser.add_argument("--target-dir", type=str, help="目标目录路径（目录下每个子目录是一个测试模型）")
     parser.add_argument("--log-dir", type=str, help="日志目录路径（可替代 --target-dir）")
     parser.add_argument("--target-layout-config", type=str, default=None, help="target-dir 布局配置文件路径")
+    parser.add_argument("--codebase-root", type=str, default=None, help="源码根目录（用于提取报错源码上下文）")
     parser.add_argument("--output", type=str, default="./output", help="输出目录（默认: ./output）")
     parser.add_argument(
         "--mode",
@@ -76,6 +93,8 @@ def _interactive_setup() -> dict:
         "target_dir": target_dir,
         "output_dir": output_dir,
         "llm_config_path": "",
+        "target_layout_path": "",
+        "codebase_root": "",
         "mode": mode,
         "auto_fix": auto_fix,
     }
@@ -100,14 +119,7 @@ def _show_llm_health(llm_config: str | None, timeout: int = 3) -> None:
 
 
 def _step_title(step_key: str) -> str:
-    return {
-        "extract": t("step_extract"),
-        "classification": t("step_classify"),
-        "debug": t("step_debug"),
-        "save_history": t("step_save"),
-        "report": t("step_report"),
-        "charts": t("step_charts"),
-    }.get(step_key, step_key)
+    return t(_STEP_TITLES.get(step_key, step_key))
 
 
 def _step_detail(step_key: str, state: dict) -> str:
@@ -115,6 +127,10 @@ def _step_detail(step_key: str, state: dict) -> str:
         return f"{len(state.get('errors', []))} 条错误 · {len(state.get('models', []))} 个模型"
     if step_key == "classification":
         return f"{len(state.get('error_groups', {}))} 个错误类别"
+    if step_key == "source_context":
+        errors = state.get("errors", [])
+        resolved = sum(1 for item in errors if item.error_file_path != "Unknown")
+        return f"{resolved}/{len(errors)} 条错误定位到源码"
     if step_key == "debug":
         results = state.get("debug_results", [])
         failed = sum(1 for item in results if item.fix_status.value == "failed")
@@ -195,6 +211,27 @@ def _step_snapshot_lines(step_key: str, state: dict) -> list[str]:
             )
         return lines
 
+    if step_key == "source_context":
+        errors = state.get("errors", [])
+        resolved = [err for err in errors if err.error_file_path != "Unknown"]
+        source_hits = [
+            err for err in resolved
+            if err.source_code_context and "源码未找到" not in err.source_code_context
+        ]
+        lines = [
+            f"resolved_paths: {len(resolved)}/{len(errors)}",
+            f"source_hits: {len(source_hits)}/{len(errors)}",
+        ]
+        if state.get("codebase_root"):
+            lines.append(f"codebase_root: {state['codebase_root']}")
+        if resolved:
+            lines.append("source_samples:")
+            lines.extend(
+                f"  - {err.error_file_path}:{err.error_line_num or '?'}"
+                for err in resolved[:3]
+            )
+        return lines
+
     if step_key == "debug":
         results = state.get("debug_results", [])
         status_counts = Counter(item.fix_status.value for item in results)
@@ -220,12 +257,7 @@ def _step_snapshot_lines(step_key: str, state: dict) -> list[str]:
 def _step_snapshot_title(step_key: str, state: dict) -> str:
     if step_key == "extract" and "errors" not in state and "models" not in state:
         return t("snapshot_inputs")
-    return {
-        "extract": t("snapshot_extract"),
-        "classification": t("snapshot_classify"),
-        "debug": t("snapshot_debug"),
-        "report": t("snapshot_report"),
-    }.get(step_key, _step_title(step_key))
+    return t(_SNAPSHOT_TITLES.get(step_key, _STEP_TITLES.get(step_key, step_key)))
 
 
 def _show_step_snapshot(step_key: str, state: dict) -> None:
@@ -234,11 +266,63 @@ def _show_step_snapshot(step_key: str, state: dict) -> None:
         ui.show_step_snapshot(_step_snapshot_title(step_key, state), snapshot_lines)
 
 
+def _extract_with_source_context(
+    target_dir: str,
+    target_layout_path: str,
+    codebase_root: str,
+    log_dir: str = "",
+) -> dict:
+    """Run extract + source context enrichment for direct CLI modes."""
+    from model_test_agent.graphs.main_graph import _enrich_source_context, _extract
+
+    initial_state = {
+        "target_dir": target_dir,
+        "target_layout_path": target_layout_path,
+        "codebase_root": codebase_root,
+        "log_dir": log_dir,
+    }
+    extracted = _extract(initial_state)
+    extracted.update(_enrich_source_context({**initial_state, **extracted}))
+    return extracted
+
+
+def _run_classification(errors: list, models: list, llm_config_path: str) -> dict:
+    """Execute the classification subgraph and return its state updates."""
+    from model_test_agent.graphs.classification_subgraph import build_classification_subgraph
+
+    graph = build_classification_subgraph().compile()
+    return graph.invoke({
+        "errors": errors,
+        "models": models,
+        "error_groups": {},
+        "llm_config_path": llm_config_path,
+    })
+
+
+def _show_direct_extract_flow(
+    target_dir: str,
+    target_layout_path: str,
+    codebase_root: str,
+    log_dir: str = "",
+) -> dict:
+    """Display extract/source-context stages for classify/debug-only modes."""
+    console.print(f"\n[bold blue]{t('step_extract')}...[/bold blue]")
+    _show_step_snapshot(
+        "extract",
+        {"target_dir": target_dir, "target_layout_path": target_layout_path, "log_dir": log_dir},
+    )
+    extracted = _extract_with_source_context(target_dir, target_layout_path, codebase_root, log_dir)
+    _show_step_snapshot("extract", extracted)
+    _show_step_snapshot("source_context", {"errors": extracted.get("errors", []), "codebase_root": codebase_root})
+    return extracted
+
+
 def _run_full_pipeline(
     target_dir: str,
     output_dir: str,
     llm_config_path: str,
     target_layout_path: str,
+    codebase_root: str,
     max_retries: int,
     auto_fix: bool,
     log_dir: str = "",
@@ -260,6 +344,7 @@ def _run_full_pipeline(
             "output_dir": output_dir,
             "llm_config_path": llm_config_path,
             "target_layout_path": target_layout_path,
+            "codebase_root": codebase_root,
             "auto_fix": auto_fix,
             "max_retries": max_retries,
             "retry_count": 0,
@@ -335,27 +420,16 @@ def _run_classify_only(
     output_dir: str,
     llm_config_path: str,
     target_layout_path: str,
+    codebase_root: str,
     log_dir: str = "",
 ) -> None:
     """Run only the classification subgraph."""
-    from model_test_agent.graphs.classification_subgraph import build_classification_subgraph
-    from model_test_agent.graphs.main_graph import _extract
-
-    console.print(f"\n[bold blue]{t('step_extract')}...[/bold blue]")
-    _show_step_snapshot("extract", {"target_dir": target_dir, "target_layout_path": target_layout_path, "log_dir": log_dir})
-    extracted = _extract({"target_dir": target_dir, "target_layout_path": target_layout_path, "log_dir": log_dir})
+    extracted = _show_direct_extract_flow(target_dir, target_layout_path, codebase_root, log_dir)
     errors = extracted.get("errors", [])
     models = extracted.get("models", [])
-    _show_step_snapshot("extract", extracted)
 
     console.print(f"[bold blue]{t('step_classify')}...[/bold blue]")
-    graph = build_classification_subgraph().compile()
-    result = graph.invoke({
-        "errors": errors,
-        "models": models,
-        "error_groups": {},
-        "llm_config_path": llm_config_path,
-    })
+    result = _run_classification(errors, models, llm_config_path)
     _show_step_snapshot("classification", {"errors": result.get("errors", errors), "error_groups": result.get("error_groups", {})})
 
     ui.show_extraction_summary(errors, models)
@@ -370,30 +444,20 @@ def _run_debug_only(
     output_dir: str,
     llm_config_path: str,
     target_layout_path: str,
+    codebase_root: str,
     max_retries: int,
     auto_fix: bool,
     log_dir: str = "",
 ) -> None:
     """Run classification + debug subgraph (skip reporting)."""
-    from model_test_agent.graphs.classification_subgraph import build_classification_subgraph
     from model_test_agent.graphs.debug_subgraph import build_debug_subgraph
-    from model_test_agent.graphs.main_graph import _extract
 
-    console.print(f"\n[bold blue]{t('step_extract')}...[/bold blue]")
-    _show_step_snapshot("extract", {"target_dir": target_dir, "target_layout_path": target_layout_path, "log_dir": log_dir})
-    extracted = _extract({"target_dir": target_dir, "target_layout_path": target_layout_path, "log_dir": log_dir})
+    extracted = _show_direct_extract_flow(target_dir, target_layout_path, codebase_root, log_dir)
     errors = extracted.get("errors", [])
     models = extracted.get("models", [])
-    _show_step_snapshot("extract", extracted)
 
     console.print(f"[bold blue]{t('step_classify')}...[/bold blue]")
-    cls_graph = build_classification_subgraph().compile()
-    cls_result = cls_graph.invoke({
-        "errors": errors,
-        "models": models,
-        "error_groups": {},
-        "llm_config_path": llm_config_path,
-    })
+    cls_result = _run_classification(errors, models, llm_config_path)
     _show_step_snapshot("classification", {"errors": cls_result.get("errors", errors), "error_groups": cls_result.get("error_groups", {})})
 
     console.print(f"[bold blue]{t('step_debug')}...[/bold blue]")
@@ -509,6 +573,7 @@ def main() -> None:
             "output_dir": args.output,
             "llm_config_path": args.llm_config or "",
             "target_layout_path": args.target_layout_config or "",
+            "codebase_root": args.codebase_root or "",
             "mode": args.mode,
             "auto_fix": args.auto_fix,
         }
@@ -518,6 +583,7 @@ def main() -> None:
     output_dir = settings["output_dir"]
     llm_config_path = settings.get("llm_config_path", "")
     target_layout_path = settings.get("target_layout_path", "")
+    codebase_root = settings.get("codebase_root", "")
     mode = settings["mode"]
 
     input_dir = target_dir or log_dir
@@ -536,18 +602,20 @@ def main() -> None:
             output_dir,
             llm_config_path,
             target_layout_path,
+            codebase_root,
             args.max_retries,
             settings["auto_fix"],
             log_dir,
         )
     elif mode == "classify":
-        _run_classify_only(target_dir, output_dir, llm_config_path, target_layout_path, log_dir)
+        _run_classify_only(target_dir, output_dir, llm_config_path, target_layout_path, codebase_root, log_dir)
     elif mode == "debug":
         _run_debug_only(
             target_dir,
             output_dir,
             llm_config_path,
             target_layout_path,
+            codebase_root,
             args.max_retries,
             settings["auto_fix"],
             log_dir,

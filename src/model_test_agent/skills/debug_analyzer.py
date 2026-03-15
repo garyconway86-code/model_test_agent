@@ -15,14 +15,19 @@ from model_test_agent.skills.base import BaseSkill
 from model_test_agent.state import DebugResult, ErrorEntry, FixStatus, ModelInfo
 
 _SYSTEM_PROMPT = """\
-你是一个模型转换调试专家。你的任务是分析一组同类错误，找出根本原因，
-并给出具体的修复建议。如果可能，还要生成可以在 Docker 容器中执行的
-验证命令。
+你是一个模型编译器与模型转换调试专家。你的任务是结合错误日志、命中的源码片段、
+以及历史案例，分析一组同类错误的根本原因，并给出具体的修复建议。如果可能，
+还要生成可以在 Docker 容器中执行的验证命令。
 
 你的分析应当包括：
 1. 根本原因分析（root_cause）：为什么出现这个错误
 2. 修复建议（suggested_fix）：具体怎么做
 3. 验证命令（fix_command）：可选的 shell 命令，用于在 Docker 中验证修复
+
+要求：
+- 优先基于日志和源码上下文推理，不要空泛猜测。
+- 如果源码未找到，要明确说明推理仅基于日志。
+- suggested_fix 需要尽量具体，给出参数、配置项或可替代算子方向。
 
 返回格式为 JSON 对象：
 {{
@@ -109,8 +114,10 @@ class DebugAnalyzerSkill(BaseSkill):
         sample_lines = []
         for i, err in enumerate(samples):
             sample_lines.append(
-                f"### 样本 {i + 1}（{err.model_name}，行 {err.line_number}）\n"
-                f"{err.raw_context[:600]}"
+                f"### 样本 {i + 1}（{err.model_name}，日志行 {err.line_number}）\n"
+                f"日志上下文:\n{err.raw_context[:600]}\n\n"
+                f"源码定位: {err.error_file_path}:{err.error_line_num or '?'}\n"
+                f"源码上下文:\n{err.source_code_context[:1200]}"
             )
         error_samples = "\n\n".join(sample_lines)
 

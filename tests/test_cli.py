@@ -10,6 +10,11 @@ from model_test_agent.state import ErrorEntry
 
 
 class TestCLIHelpers:
+    def test_parse_args_supports_codebase_root(self, monkeypatch) -> None:
+        monkeypatch.setattr(sys, "argv", ["model-test-agent", "--codebase-root", "/repo"])
+        args = _parse_args()
+        assert args.codebase_root == "/repo"
+
     def test_parse_args_supports_target_layout_config(self, monkeypatch) -> None:
         monkeypatch.setattr(sys, "argv", ["model-test-agent", "--target-layout-config", "/tmp/target_layout.yaml"])
         args = _parse_args()
@@ -87,6 +92,7 @@ class TestCLIHelpers:
         assert _step_snapshot_title("extract", {"target_dir": "/tmp/x"}) == "输入路径"
         assert _step_snapshot_title("extract", {"errors": [], "models": []}) == "提取摘要"
         assert _step_snapshot_title("extract", {"errors": [object()], "models": []}) == "提取摘要"
+        assert _step_snapshot_title("source_context", {"errors": []}) == "源码上下文"
         assert _step_snapshot_title("classification", {"errors": [], "error_groups": {}}) == "分类摘要"
 
     def test_extract_snapshot_with_zero_errors_is_a_summary(self) -> None:
@@ -108,6 +114,30 @@ class TestCLIHelpers:
         assert any(line == f"report_html: {report_html}" for line in lines)
         assert any(line == f"viewer: {report_html.resolve().as_uri()}" for line in lines)
 
+    def test_source_snapshot_includes_resolved_paths(self) -> None:
+        lines = _step_snapshot_lines(
+            "source_context",
+            {
+                "errors": [
+                    ErrorEntry(
+                        model_name="m1",
+                        line_number=1,
+                        message="oops",
+                        error_file_path="src/a.cpp",
+                        error_line_num=88,
+                        source_code_context=">>    88 | fail();",
+                    ),
+                    ErrorEntry(model_name="m2", line_number=2, message="oops"),
+                ],
+                "codebase_root": "/repo",
+            },
+        )
+
+        assert "resolved_paths: 1/2" in lines
+        assert "source_hits: 1/2" in lines
+        assert "codebase_root: /repo" in lines
+        assert "source_samples:" in lines
+
     def test_main_forwards_llm_config_to_full_pipeline(self, monkeypatch, tmp_path) -> None:
         captured = {}
 
@@ -123,6 +153,8 @@ class TestCLIHelpers:
                 str(tmp_path / "llm.yaml"),
                 "--target-layout-config",
                 str(tmp_path / "target_layout.yaml"),
+                "--codebase-root",
+                str(tmp_path / "repo"),
             ],
         )
         monkeypatch.setattr(cli, "_run_full_pipeline", lambda *args: captured.setdefault("args", args))
@@ -131,6 +163,7 @@ class TestCLIHelpers:
 
         assert captured["args"][2] == str(tmp_path / "llm.yaml")
         assert captured["args"][3] == str(tmp_path / "target_layout.yaml")
+        assert captured["args"][4] == str(tmp_path / "repo")
 
     def test_main_requires_target_dir_for_run(self, monkeypatch, tmp_path) -> None:
         captured = {}
