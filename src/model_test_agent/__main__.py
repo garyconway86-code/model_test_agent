@@ -67,6 +67,9 @@ def _parse_args() -> argparse.Namespace:
     parser.add_argument("--export-graph", type=str, default=None, help="导出工作流图到文件（.md 或 .png）")
     parser.add_argument("--serve-report", type=str, default=None, help="启动本地共享评注服务，参数为 HTML 报告路径")
     parser.add_argument("--serve-port", type=int, default=7860, help="共享评注服务端口（默认: 7860）")
+    parser.add_argument("--export-demo-html", type=str, default=None, help="导出离线演示 HTML，参数为现有 report.html 路径")
+    parser.add_argument("--demo-output", type=str, default=None, help="离线演示 HTML 输出路径")
+    parser.add_argument("--demo-preview", action="append", default=None, help="额外打包到离线演示中的文件路径，可重复传入")
     parser.add_argument("--ui", action="store_true", help="启动远端友好的 Web UI")
     parser.add_argument("--ui-port", type=int, default=7860, help="Web UI 端口（默认: 7860）")
     return parser.parse_args()
@@ -616,6 +619,19 @@ def main() -> None:
 
     if args.serve_report:
         _serve_report(args.serve_report, args.serve_port)
+        return
+
+    if args.export_demo_html:
+        from model_test_agent.tools.demo_export import export_demo_html
+
+        output_path = export_demo_html(
+            args.export_demo_html,
+            output_path=args.demo_output,
+            preview_paths=args.demo_preview or [],
+        )
+        console.print()
+        console.print(f"[bold green]离线演示 HTML 已导出[/bold green]")
+        console.print(f"  Demo HTML: [underline]{output_path}[/underline]")
         return
 
     if args.ui:

@@ -11,6 +11,7 @@ import pytest
 from model_test_agent.state import ErrorEntry, ModelInfo, ReportRow
 from model_test_agent.debug_config import load_debug_settings
 from model_test_agent.tools.config_reader import ConfigReader
+from model_test_agent.tools.demo_export import export_demo_html
 from model_test_agent.tools.docker_executor import DockerExecutor
 from model_test_agent.tools.history_store import HistoryStore
 from model_test_agent.tools.knowledge_base import KnowledgeBase
@@ -143,6 +144,29 @@ class TestConfigReader:
         assert models[0].quantization == "int8"
         assert models[0].has_test_data is True
         assert models[1].has_test_data is False
+
+
+class TestDemoExport:
+    def test_export_demo_html_embeds_report_and_review(self, tmp_path: Path) -> None:
+        report_path = tmp_path / "report.html"
+        report_path.write_text(
+            '<html><body><div class="meta">Generated: 2026-03-15 10:00:00<br>Target Dir: /tmp/demo</div><h1>Demo</h1></body></html>',
+            encoding="utf-8",
+        )
+        review_path = report_path.with_suffix(".review.json")
+        review_path.write_text('{"demo":{"checkedBy":"tester","comment":"ok"}}', encoding="utf-8")
+        extra_path = tmp_path / "notes.txt"
+        extra_path.write_text("hello demo", encoding="utf-8")
+
+        output = export_demo_html(report_path, output_path=tmp_path / "offline_demo.html", preview_paths=[extra_path])
+        content = output.read_text(encoding="utf-8")
+
+        assert output.name == "offline_demo.html"
+        assert "离线演示包" in content
+        assert "/tmp/demo" in content
+        assert "report.review.json" in content
+        assert "hello demo" in content
+        assert "srcdoc = reportHtml" in content
 
     def test_read_single_model(self, tmp_path: Path) -> None:
         cfg = tmp_path / "single.yaml"
