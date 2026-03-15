@@ -332,6 +332,10 @@ class TestReportGenerator:
                 "debugger_model": "deepseek-chat",
                 "assisted_fields": "error_category, suggested_fix, root_cause",
             },
+            source_info={
+                "target_dir": "/demo/Models_35",
+                "discovery_rule": "1st-level subdirs => models",
+            },
         )
         assert path.exists()
         content = path.read_text()
@@ -344,6 +348,8 @@ class TestReportGenerator:
         assert "Passed Models" in content
         assert ">2</div>" in content
         assert "Agent Assist" in content
+        assert "Target Layout" in content
+        assert "/demo/Models_35" in content
         assert "deepseek-chat" in content
         assert "demo-kit | v1.2.3" in content
 

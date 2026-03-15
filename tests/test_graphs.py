@@ -172,9 +172,10 @@ class TestGraphConstruction:
             def generate_xlsx(self, rows):
                 return tmp_path / "report.xlsx"
 
-            def generate_html(self, rows, summary=None, agent_info=None):
+            def generate_html(self, rows, summary=None, agent_info=None, source_info=None):
                 self.summary = summary
                 self.agent_info = agent_info
+                self.source_info = source_info
                 self.rows = rows
                 return tmp_path / "report.html"
 

@@ -121,6 +121,7 @@ class ReportGenerator:
         filename: str | None = None,
         summary: dict[str, int] | None = None,
         agent_info: dict[str, str] | None = None,
+        source_info: dict[str, str] | None = None,
     ) -> Path:
         """Write a self-contained HTML report and return the file path."""
         html_cfg = self._cfg.get("html", {})
@@ -173,6 +174,7 @@ class ReportGenerator:
         passed_models = summary.get("passed_models", 0)
         failed_models = summary.get("failed_models", len({row.model_name for row in rows}))
         agent_info = agent_info or {}
+        source_info = source_info or {}
         by_category: dict[str, int] = {}
         by_status: dict[str, int] = {}
         for r in rows:
@@ -204,6 +206,8 @@ class ReportGenerator:
             classifier_model=html.escape(agent_info.get("classifier_model", "-")),
             debugger_model=html.escape(agent_info.get("debugger_model", "-")),
             assisted_fields=html.escape(agent_info.get("assisted_fields", "")),
+            target_dir=html.escape(source_info.get("target_dir", "-")),
+            discovery_rule=html.escape(source_info.get("discovery_rule", "")),
             timestamp=datetime.now().strftime("%Y-%m-%d %H:%M:%S"),
             visible_rows=len(rows),
         )
@@ -400,6 +404,9 @@ _HTML_TEMPLATE = """\
   .summary-card.agent {{
     min-width: 320px;
   }}
+  .summary-card.source {{
+    min-width: 360px;
+  }}
   .summary-card h3 {{
     font-size: 0.85em;
     color: #7f8c8d;
@@ -413,7 +420,15 @@ _HTML_TEMPLATE = """\
     line-height: 1.6;
     color: #425466;
   }}
+  .source-lines {{
+    font-size: 0.92em;
+    line-height: 1.6;
+    color: #425466;
+  }}
   .agent-lines strong {{
+    color: var(--primary);
+  }}
+  .source-lines strong {{
     color: var(--primary);
   }}
   .summary-card table {{ width: 100%; font-size: 0.9em; }}
@@ -778,6 +793,13 @@ _HTML_TEMPLATE = """\
         <div><strong>Classifier</strong>: {classifier_model}</div>
         <div><strong>Debugger</strong>: {debugger_model}</div>
         <div><strong>AI-assisted fields</strong>: {assisted_fields}</div>
+      </div>
+    </div>
+    <div class="summary-card source">
+      <h3>Target Layout</h3>
+      <div class="source-lines">
+        <div><strong>Target Dir</strong>: {target_dir}</div>
+        <div><strong>Discovery</strong>: {discovery_rule}</div>
       </div>
     </div>
     <div class="summary-card">

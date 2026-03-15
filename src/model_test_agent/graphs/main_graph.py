@@ -164,10 +164,14 @@ def _report(state: AgentState) -> dict[str, Any]:
         "failed_models": len(rows) - passed_models,
     }
     agent_info = _build_agent_info(state.get("llm_config_path", ""))
+    source_info = {
+        "target_dir": state.get("target_dir") or "-",
+        "discovery_rule": "1st-level subdirs => models; read model_config/config, package_info.json, and *.log",
+    }
 
     gen = ReportGenerator(output_dir=state.get("output_dir", "."))
     xlsx_path = gen.generate_xlsx(rows)
-    html_path = gen.generate_html(rows, summary=summary, agent_info=agent_info)
+    html_path = gen.generate_html(rows, summary=summary, agent_info=agent_info, source_info=source_info)
 
     return {
         "report_rows": rows,
